@@ -1,7 +1,7 @@
 use tauri::{AppHandle, State};
 
 use crate::{
-    models::skill::{SkillDetailRecord, SkillRecord, SkillTemplateRecord},
+    models::skill::{SkillDetailRecord, SkillDraft, SkillRecord, SkillTemplateRecord},
     services,
     state::AppState,
 };
@@ -14,6 +14,14 @@ pub fn list_skill_templates() -> Result<Vec<SkillTemplateRecord>, String> {
 #[tauri::command]
 pub fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillRecord>, String> {
     services::skill::list_skills(state.inner())
+}
+
+#[tauri::command]
+pub fn create_skill(
+    state: State<'_, AppState>,
+    skill: SkillDraft,
+) -> Result<SkillRecord, String> {
+    services::skill::create_skill(state.inner(), &skill)
 }
 
 #[tauri::command]

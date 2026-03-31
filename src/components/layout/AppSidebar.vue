@@ -6,6 +6,10 @@ import { RouterLink, useRoute } from "vue-router";
 const { t } = useI18n();
 const route = useRoute();
 
+function isActive(path: string) {
+  return route.path === path || route.path.startsWith(`${path}/`);
+}
+
 const navItems = [
   {
     to: "/chat",
@@ -73,7 +77,7 @@ const navItems = [
         <a
           :href="href"
           class="sidebar-link"
-          :data-active="route.path === item.to"
+          :data-active="isActive(item.to)"
           @click="navigate"
         >
           <component :is="item.icon" :size="18" />

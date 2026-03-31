@@ -623,12 +623,29 @@ export interface SkillDetailRecord {
   markdown_content: string;
 }
 
+export interface SkillDraft {
+  slug: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  tags_json: string;
+  markdown_content: string;
+  enabled: boolean;
+}
+
 export function listSkillTemplates() {
   return invoke<SkillTemplateRecord[]>("list_skill_templates");
 }
 
 export function listSkills() {
   return invoke<SkillRecord[]>("list_skills");
+}
+
+export function createSkill(skill: SkillDraft) {
+  return invoke<SkillRecord>("create_skill", {
+    skill
+  });
 }
 
 export function getSkillDetail(skillId: string) {
@@ -749,7 +766,6 @@ export function discoverMcpServerTools(serverId: string) {
     serverId
   });
 }
-
 
 
 

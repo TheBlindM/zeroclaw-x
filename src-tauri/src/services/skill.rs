@@ -10,7 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     db,
-    models::skill::{SkillDetailRecord, SkillRecord, SkillTemplateRecord},
+    models::skill::{SkillDetailRecord, SkillDraft, SkillRecord, SkillTemplateRecord},
     state::AppState,
 };
 
@@ -70,6 +70,67 @@ pub fn list_templates() -> Vec<SkillTemplateRecord> {
 
 pub fn list_skills(state: &AppState) -> Result<Vec<SkillRecord>, String> {
     db::list_skills(&state.db_path())
+}
+
+pub fn create_skill(state: &AppState, skill: &SkillDraft) -> Result<SkillRecord, String> {
+    let name = skill.name.trim();
+    if name.is_empty() {
+        return Err("Skill name is required.".to_string());
+    }
+
+    let description = skill.description.trim();
+    if description.is_empty() {
+        return Err("Skill description is required.".to_string());
+    }
+
+    let markdown_content = skill.markdown_content.trim();
+    if markdown_content.is_empty() {
+        return Err("Skill instructions are required.".to_string());
+    }
+
+    let slug_source = if skill.slug.trim().is_empty() {
+        name
+    } else {
+        skill.slug.trim()
+    };
+    let slug = normalize_slug(slug_source);
+
+    if db::get_skill_by_slug(&state.db_path(), &slug)?.is_some() {
+        return Err("Skill slug already exists.".to_string());
+    }
+
+    let destination = library_root_from_db(&state.db_path())?.join(&slug);
+    if destination.exists() {
+        return Err("Skill directory already exists on disk.".to_string());
+    }
+
+    let version = if skill.version.trim().is_empty() {
+        default_skill_version()
+    } else {
+        skill.version.trim().to_string()
+    };
+    let tags = parse_tags_json(&skill.tags_json)?;
+
+    fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
+    fs::write(destination.join("SKILL.md"), markdown_content).map_err(|error| error.to_string())?;
+
+    let record = upsert_skill_record(
+        &state.db_path(),
+        &ParsedSkillMetadata {
+            slug,
+            name: name.to_string(),
+            description: description.to_string(),
+            version,
+            author: skill.author.trim().to_string(),
+            tags,
+        },
+        "manual",
+        "manual",
+        skill.enabled,
+    )?;
+
+    sync_runtime_skills(&state.db_path(), &state.settings_path())?;
+    Ok(record)
 }
 
 pub fn get_skill_detail(state: &AppState, skill_id: &str) -> Result<SkillDetailRecord, String> {
@@ -410,6 +471,17 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
     }
 
     unique.into_iter().collect()
+}
+
+fn parse_tags_json(tags_json: &str) -> Result<Vec<String>, String> {
+    if tags_json.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let parsed = serde_json::from_str::<Vec<String>>(tags_json)
+        .map_err(|error| format!("Failed to parse skill tags JSON: {error}"))?;
+
+    Ok(normalize_tags(parsed))
 }
 
 fn normalize_slug(value: &str) -> String {

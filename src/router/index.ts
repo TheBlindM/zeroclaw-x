@@ -6,6 +6,9 @@ import ProjectsView from "@/views/ProjectsView.vue";
 import SkillsView from "@/views/SkillsView.vue";
 import CronView from "@/views/CronView.vue";
 import SettingsView from "@/views/SettingsView.vue";
+import ChannelCreateView from "@/views/ChannelCreateView.vue";
+import McpCreateView from "@/views/McpCreateView.vue";
+import SkillCreateView from "@/views/SkillCreateView.vue";
 
 export const routes = [
   {
@@ -40,6 +43,15 @@ export const routes = [
     }
   },
   {
+    path: "/channels/new",
+    name: "channels-create",
+    component: ChannelCreateView,
+    meta: {
+      titleKey: "routes.channelsCreate.title",
+      descriptionKey: "routes.channelsCreate.description"
+    }
+  },
+  {
     path: "/mcp",
     name: "mcp",
     component: McpView,
@@ -49,12 +61,30 @@ export const routes = [
     }
   },
   {
+    path: "/mcp/new",
+    name: "mcp-create",
+    component: McpCreateView,
+    meta: {
+      titleKey: "routes.mcpCreate.title",
+      descriptionKey: "routes.mcpCreate.description"
+    }
+  },
+  {
     path: "/skills",
     name: "skills",
     component: SkillsView,
     meta: {
       titleKey: "routes.skills.title",
       descriptionKey: "routes.skills.description"
+    }
+  },
+  {
+    path: "/skills/new",
+    name: "skills-create",
+    component: SkillCreateView,
+    meta: {
+      titleKey: "routes.skillsCreate.title",
+      descriptionKey: "routes.skillsCreate.description"
     }
   },
   {

@@ -2,11 +2,13 @@
 import { storeToRefs } from "pinia";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
 import { useMcpStore, type McpServerItem } from "@/stores/mcp";
 
 const mcpStore = useMcpStore();
+const router = useRouter();
 const { activeServer, activeToolCount, enabledCount, remoteCount, servers, stdioCount } = storeToRefs(mcpStore);
 const { t } = useI18n();
 
@@ -103,9 +105,7 @@ function resetForm() {
 }
 
 function handleNewServer() {
-  mcpStore.clearActiveServer();
-  resetForm();
-  feedback.value = t("mcp.feedback.readyForNewServer");
+  router.push("/mcp/new");
 }
 
 function resolveTransportLabel(server: McpServerItem) {

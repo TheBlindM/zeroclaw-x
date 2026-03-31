@@ -106,6 +106,7 @@ pub fn run() {
             commands::settings::test_runtime_profile,
             commands::settings::test_runtime_settings,
             commands::settings::update_runtime_profile,
+            commands::skill::create_skill,
             commands::skill::delete_skill,
             commands::skill::get_skill_detail,
             commands::skill::import_skill_directory,

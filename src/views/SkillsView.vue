@@ -2,11 +2,13 @@
 import { storeToRefs } from "pinia";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
 import { parseTags, useSkillStore, type SkillItem, type SkillTemplateItem } from "@/stores/skill";
 
 const skillStore = useSkillStore();
+const router = useRouter();
 const { activeSkill, activeSkillDetail, enabledCount, importedCount, skills, templates } = storeToRefs(skillStore);
 const { t } = useI18n();
 
@@ -162,6 +164,9 @@ async function handleDeleteSkill(skill: SkillItem) {
             <span class="muted">{{ t("skills.libraryDescription") }}</span>
           </div>
           <div class="row" style="flex-wrap: wrap;">
+            <Button variant="secondary" :disabled="skillStore.isSaving || skillStore.isImporting" @click="router.push('/skills/new')">
+              {{ t("skills.createSkill") }}
+            </Button>
             <input v-model="search" class="field skills-search" :placeholder="t('skills.searchPlaceholder')" />
             <Button variant="secondary" :disabled="skillStore.isImporting || skillStore.isSaving" @click="handleImportDirectory">
               {{ skillStore.isImporting ? t("skills.importing") : t("skills.importDirectory") }}
@@ -308,4 +313,3 @@ async function handleDeleteSkill(skill: SkillItem) {
     <p v-if="feedback || skillStore.error" class="muted">{{ feedback || skillStore.error }}</p>
   </div>
 </template>
-

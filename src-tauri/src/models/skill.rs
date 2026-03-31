@@ -31,3 +31,15 @@ pub struct SkillDetailRecord {
     pub skill: SkillRecord,
     pub markdown_content: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillDraft {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub author: String,
+    pub tags_json: String,
+    pub markdown_content: String,
+    pub enabled: bool,
+}

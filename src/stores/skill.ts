@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import {
+  createSkill as createSkillRequest,
   deleteSkill,
   getSkillDetail,
   importSkillDirectory,
@@ -7,6 +8,7 @@ import {
   listSkillTemplates,
   listSkills,
   setSkillEnabled,
+  type SkillDraft,
   type SkillDetailRecord,
   type SkillRecord,
   type SkillTemplateRecord
@@ -201,6 +203,22 @@ export const useSkillStore = defineStore("skills", {
         throw error;
       } finally {
         this.isLoading = false;
+      }
+    },
+    async createSkill(skill: SkillDraft) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        const created = this.applySkill(await createSkillRequest(skill));
+        await this.loadSkillDetail(created.id);
+        this.loaded = true;
+        return created;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
       }
     },
     async installTemplate(templateId: string) {

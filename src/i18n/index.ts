@@ -23,9 +23,17 @@ const en = {
       title: "Channels",
       description: "Configure channel connectors, test health, and control the background supervisor."
     },
+    channelsCreate: {
+      title: "New Channel",
+      description: "Create a new channel connector and save it into the local workspace."
+    },
     mcp: {
       title: "MCP",
       description: "Manage MCP servers, transports, and connectivity checks."
+    },
+    mcpCreate: {
+      title: "New MCP Server",
+      description: "Register a new MCP server and capture its transport settings."
     },
     cron: {
       title: "Cron Jobs",
@@ -34,6 +42,10 @@ const en = {
     skills: {
       title: "Skills",
       description: "Install local skills, preview instructions, and sync enabled skills into the runtime workspace."
+    },
+    skillsCreate: {
+      title: "New Skill",
+      description: "Create a local skill and write its instruction file into the desktop workspace."
     },
     settings: {
       title: "Settings",
@@ -258,6 +270,8 @@ const en = {
     newServer: "New MCP server",
     newDraft: "New draft",
     editorDescription: "Capture the transport, launch target, JSON arguments or headers, and whether this endpoint should stay active.",
+    createStandaloneTitle: "Create MCP server",
+    createStandaloneDescription: "Register the server here, then return to the MCP workspace for connectivity tests and tool discovery.",
     serverName: "Server name",
     serverNamePlaceholder: "Filesystem tools",
     transport: "Transport",
@@ -268,17 +282,18 @@ const en = {
     command: "Command",
     commandPlaceholder: "npx",
     argumentsJson: "Arguments JSON",
-    argumentsJsonPlaceholder: "[\"-y\", \"@modelcontextprotocol/server-filesystem\", \"D:/study\"]",
+    argumentsJsonPlaceholder: "[\"-y\", \"{'@'}modelcontextprotocol/server-filesystem\", \"D:/study\"]",
     argumentsJsonHint: "Provide a JSON array of strings. This is used only for stdio servers.",
     environmentJson: "Environment JSON",
-    environmentJsonPlaceholder: "{\"NODE_ENV\": \"production\"}",
+    environmentJsonPlaceholder: "Example: NODE_ENV=production",
     environmentJsonHint: "Provide a JSON object of string values. This is used only for stdio servers.",
     url: "URL",
     urlPlaceholder: "http://127.0.0.1:3001/sse",
     headersJson: "Headers JSON",
-    headersJsonPlaceholder: "{\"Authorization\": \"Bearer ...\"}",
+    headersJsonPlaceholder: "Example: Authorization=Bearer ...",
     headersJsonHint: "Provide a JSON object of string values. This is used for remote transports.",
     enabledToggle: "Keep this MCP server enabled in the workspace",
+    cancelCreate: "Cancel",
     resetForm: "Reset form",
     saving: "Saving...",
     saveServer: "Save server",
@@ -405,6 +420,8 @@ const en = {
     boardTitle: "Configured channels",
     boardDescription: "This first release supports Telegram, Discord, Slack, and Webhook with per-channel health checks.",
     editorDescription: "Pick a channel type, fill in its connector fields, and save it into the local desktop database.",
+    createStandaloneTitle: "Create channel",
+    createStandaloneDescription: "Save a new channel connector first. Editing, testing, and supervisor control stay in the channels workspace.",
     newChannel: "New channel",
     newDraft: "New draft",
     channelName: "Channel name",
@@ -414,6 +431,7 @@ const en = {
     enabled: "Enabled",
     disabled: "Disabled",
     enabledToggle: "Enable this channel for the shared supervisor",
+    cancelCreate: "Cancel",
     healthy: "Healthy",
     unhealthy: "Unhealthy",
     untested: "Untested",
@@ -440,7 +458,7 @@ const en = {
     telegramBotToken: "Telegram bot token",
     telegramBotTokenPlaceholder: "123456:ABCDEF",
     telegramAllowedUsers: "Allowed users",
-    telegramAllowedUsersPlaceholder: "123456789, @operator",
+    telegramAllowedUsersPlaceholder: "123456789, {'@'}operator",
     telegramMentionOnly: "Only respond when mentioned in groups",
     discordBotToken: "Discord bot token",
     discordBotTokenPlaceholder: "Discord bot token",
@@ -504,6 +522,26 @@ const en = {
     libraryTitle: "Installed skills",
     libraryDescription: "Each enabled skill is copied into the local runtime workspace so the agent can load it automatically.",
     searchPlaceholder: "Search skills",
+    createSkill: "Create skill",
+    createTitle: "Create skill",
+    createDescription: "Define metadata and write a new local `SKILL.md` that can be synced into the runtime workspace.",
+    name: "Skill name",
+    namePlaceholder: "Repository Triage",
+    slugInput: "Slug",
+    slugPlaceholder: "Optional, generated from the name when blank",
+    descriptionInput: "Short description",
+    descriptionPlaceholder: "Summarize issues, risks, and the next actions for a repository.",
+    versionInput: "Version",
+    versionPlaceholder: "0.1.0",
+    authorInput: "Author",
+    authorPlaceholder: "Your team name",
+    tagsInput: "Tags",
+    tagsPlaceholder: "review, onboarding, engineering",
+    instructionsInput: "Instructions",
+    instructionsPlaceholder: "- Explain the current state first.\n- List the riskiest issues.\n- End with concrete next steps.",
+    enabledToggleCreate: "Enable this skill immediately after creation",
+    creating: "Creating...",
+    cancelCreate: "Cancel",
     importDirectory: "Import folder",
     importing: "Importing",
     loadingTitle: "Loading skills",
@@ -540,7 +578,9 @@ const en = {
       deleteSkill: "Delete skill \"{name}\"?"
     },
     feedback: {
+      created: "Created skill {name}.",
       installed: "Installed template as {name}.",
+      createFailed: "Creating the skill failed.",
       installFailed: "Installing the skill template failed.",
       imported: "Imported skill {name}.",
       importCancelled: "Import cancelled.",
@@ -794,6 +834,7 @@ const zh = {
     settings: "设置"
   },
   routes: {
+    ...en.routes,
     chat: {
       title: "工作区聊天",
       description: "管理会话、流式消息和项目上下文。"
@@ -806,9 +847,17 @@ const zh = {
       title: "渠道",
       description: "配置渠道连接、执行健康检查，并控制后台 supervisor。"
     },
+    channelsCreate: {
+      title: "新增渠道",
+      description: "创建新的渠道连接并保存到本地工作区。"
+    },
     mcp: {
       title: "MCP",
       description: "管理 MCP 服务、传输方式和连通性测试。"
+    },
+    mcpCreate: {
+      title: "新增 MCP 服务",
+      description: "登记新的 MCP 服务并保存其传输配置。"
     },
     cron: {
       title: "定时任务",
@@ -817,6 +866,10 @@ const zh = {
     skills: {
       title: "技能",
       description: "安装本地技能、预览说明，并把启用技能同步到运行时工作区。"
+    },
+    skillsCreate: {
+      title: "新增技能",
+      description: "创建本地技能，并写入对应的指令文件。"
     },
     settings: {
       title: "设置",
@@ -852,10 +905,6 @@ export const i18n = createI18n({
     zh
   }
 });
-
-
-
-
 
 
 

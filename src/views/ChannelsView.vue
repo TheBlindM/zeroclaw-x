@@ -2,12 +2,14 @@
 import { storeToRefs } from "pinia";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { onChannelRuntimeStatus, type ChannelDraft } from "@/api/tauri";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
 import { useChannelStore, type ChannelItem } from "@/stores/channel";
 
 const channelStore = useChannelStore();
+const router = useRouter();
 const { activeChannel, channels, enabledCount, healthyCount, runtimeStatus } = storeToRefs(channelStore);
 const { t } = useI18n();
 
@@ -214,8 +216,7 @@ function resolveHealthLabel(channel: ChannelItem) {
 }
 
 function handleNewChannel() {
-  resetForm(true);
-  feedback.value = t("channels.feedback.readyForNewChannel");
+  router.push("/channels/new");
 }
 
 function handleSelectChannel(channelId: string) {
