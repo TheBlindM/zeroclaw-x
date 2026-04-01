@@ -6,7 +6,7 @@ import { useRouter } from "vue-router";
 import { onChannelRuntimeStatus, type ChannelDraft } from "@/api/tauri";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
-import { useChannelStore, type ChannelItem } from "@/stores/channel";
+import { defaultRuntimeStatus, useChannelStore, type ChannelItem } from "@/stores/channel";
 
 const channelStore = useChannelStore();
 const router = useRouter();
@@ -53,6 +53,14 @@ const filteredChannels = computed(() => {
     const haystack = `${channel.name} ${channel.kind} ${channel.lastHealthStatus ?? ""} ${channel.lastHealthMessage ?? ""}`.toLowerCase();
     return haystack.includes(query);
   });
+});
+
+const runtimeStatusMessage = computed(() => {
+  if (runtimeStatus.value.state === "idle" && runtimeStatus.value.message === defaultRuntimeStatus().message) {
+    return t("channels.runtimeIdleMessage");
+  }
+
+  return runtimeStatus.value.message;
 });
 
 watch(
@@ -518,7 +526,7 @@ async function handleStopRuntime() {
 
       <div class="settings-test-card" :data-ok="runtimeStatus.running">
         <strong>{{ runtimeStatus.running ? t("channels.runtimeRunning") : t("channels.runtimeStopped") }}</strong>
-        <p class="settings-test-card__message">{{ runtimeStatus.message }}</p>
+        <p class="settings-test-card__message">{{ runtimeStatusMessage }}</p>
         <span class="muted">{{ t("channels.runtimeUpdatedAt", { value: runtimeStatus.updatedAt ? formatTimestamp(runtimeStatus.updatedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : t('channels.none') }) }}</span>
       </div>
     </section>
