@@ -78,6 +78,7 @@ export interface SessionKnowledgeScopeRecord {
 
 export type RuntimeProxyScopeRecord = "environment" | "zeroclaw" | "services";
 export type RuntimeAutonomyLevelRecord = "read_only" | "supervised" | "full";
+export type RuntimeCredentialModeRecord = "api_key" | "auth_profile";
 
 export interface RuntimeProxySettingsRecord {
   enabled: boolean;
@@ -116,6 +117,8 @@ export interface RuntimeSettingsRecord {
   model: string;
   provider_url: string;
   api_key: string;
+  credential_mode: RuntimeCredentialModeRecord;
+  auth_profile: string;
   temperature: number;
   proxy: RuntimeProxySettingsRecord;
   agent: RuntimeAgentSettingsRecord;
@@ -160,11 +163,53 @@ export interface RuntimeStatusRecord {
   provider_url: string;
   temperature: number;
   api_key_configured: boolean;
+  credential_mode: RuntimeCredentialModeRecord;
+  auth_profile: string;
   workspace_dir: string;
   tool_dispatcher: string;
   autonomy_level: RuntimeAutonomyLevelRecord;
   workspace_only: boolean;
   parallel_tools: boolean;
+}
+
+export interface AuthProfileRecord {
+  id: string;
+  provider: string;
+  profile_name: string;
+  kind: string;
+  account_id: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+  is_active: boolean;
+}
+
+export interface AuthProfilesStateRecord {
+  provider: string;
+  active_profile_id: string | null;
+  profiles: AuthProfileRecord[];
+}
+
+export interface AuthLoginChallengeRecord {
+  login_id: string;
+  provider: string;
+  profile_name: string;
+  verification_uri: string;
+  verification_uri_complete: string | null;
+  user_code: string;
+  expires_at: string;
+  interval_seconds: number;
+  message: string | null;
+}
+
+export interface AuthLoginStatusRecord {
+  login_id: string;
+  provider: string;
+  profile_name: string;
+  status: string;
+  message: string;
+  completed_profile_id: string | null;
+  completed_at: string | null;
 }
 
 export interface UpdateSettingsRecord {
@@ -421,6 +466,31 @@ export function testRuntimeSettings(settings: RuntimeSettingsRecord) {
 export function testRuntimeProfile(profile: RuntimeProfileRecord) {
   return invoke<RuntimeConnectionReport>("test_runtime_profile", {
     profile
+  });
+}
+
+export function listAuthProfiles(provider: string) {
+  return invoke<AuthProfilesStateRecord>("list_auth_profiles", {
+    provider
+  });
+}
+
+export function startAuthLogin(provider: string, profileName: string) {
+  return invoke<AuthLoginChallengeRecord>("start_auth_login", {
+    provider,
+    profileName
+  });
+}
+
+export function openExternalUrl(url: string) {
+  return invoke<void>("open_external_url", {
+    url
+  });
+}
+
+export function getAuthLoginStatus(loginId: string) {
+  return invoke<AuthLoginStatusRecord>("get_auth_login_status", {
+    loginId
   });
 }
 
@@ -766,8 +836,6 @@ export function discoverMcpServerTools(serverId: string) {
     serverId
   });
 }
-
-
 
 
 

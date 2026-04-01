@@ -24,6 +24,8 @@ export const defaultRuntimeSettings = (): RuntimeSettingsRecord => ({
   model: "anthropic/claude-sonnet-4.6",
   provider_url: "",
   api_key: "",
+  credential_mode: "api_key",
+  auth_profile: "",
   temperature: 0.7,
   proxy: {
     enabled: false,
@@ -64,6 +66,8 @@ export const defaultRuntimeStatus = (): RuntimeStatusRecord => ({
   provider_url: "",
   temperature: 0.7,
   api_key_configured: false,
+  credential_mode: "api_key",
+  auth_profile: "",
   workspace_dir: "",
   tool_dispatcher: "auto",
   autonomy_level: "supervised",

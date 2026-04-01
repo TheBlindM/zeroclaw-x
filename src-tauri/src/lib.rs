@@ -9,6 +9,8 @@ use tauri::{
     tray::TrayIconBuilder,
     Manager,
 };
+use tracing::{error, info};
+use tracing_subscriber::{fmt, EnvFilter};
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open ZeroClawX", true, None::<&str>)?;
@@ -37,7 +39,20 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+fn init_logging() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("zeroclawx=info"));
+
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .try_init();
+}
+
 pub fn run() {
+    init_logging();
+    info!("starting ZeroClawX desktop app");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -47,13 +62,21 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let app_state = state::AppState::new(app.path().app_data_dir()?)?;
+            let app_data_dir = app.path().app_data_dir()?;
+            info!(app_data_dir = %app_data_dir.display(), "initializing app state");
+
+            let app_state = state::AppState::new(app_data_dir)?;
             app.manage(app_state.clone());
             services::cron::start_scheduler(app.handle().clone(), app_state);
             build_tray(app)?;
+            info!("application setup completed");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::auth::get_auth_login_status,
+            commands::auth::list_auth_profiles,
+            commands::auth::open_external_url,
+            commands::auth::start_auth_login,
             commands::channel::create_channel,
             commands::channel::delete_channel,
             commands::channel::get_channel_runtime_status,
@@ -120,5 +143,8 @@ pub fn run() {
             commands::update::save_update_settings
         ])
         .run(tauri::generate_context!())
-        .expect("error while running ZeroClawX");
+        .unwrap_or_else(|error| {
+            error!(?error, "error while running ZeroClawX");
+            panic!("error while running ZeroClawX: {error}");
+        });
 }
