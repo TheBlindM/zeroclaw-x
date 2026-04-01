@@ -602,6 +602,24 @@ const en = {
   settings: {
     runtimeTitle: "Runtime settings",
     runtimeDescription: "These values are saved locally and used by the Tauri backend for the next message.",
+    tabs: {
+      general: {
+        label: "General",
+        description: "Desktop preferences and how saved runtime settings take effect."
+      },
+      runtime: {
+        label: "Runtime",
+        description: "Manage profiles, apply presets, and configure model routing, credentials, network access, and runtime validation."
+      },
+      agent: {
+        label: "Agent",
+        description: "Control workspace, tool execution, approvals, and advanced autonomy boundaries."
+      },
+      updates: {
+        label: "Updates",
+        description: "Manage desktop updater feeds, checks, and installation actions."
+      }
+    },
     toggleTheme: "Toggle theme",
     theme: "Theme",
     darkTheme: "Dark",
@@ -742,6 +760,8 @@ const en = {
     alwaysAskTools: "Always-ask tools",
     alwaysAskToolsPlaceholder: "shell",
     alwaysAskToolsHint: "Tools that should always stop for approval, even after a previous Always decision.",
+    autonomyAdvancedTitle: "Advanced autonomy",
+    autonomyAdvancedDescription: "Review command allowlists, extra roots, shell environment passthrough, and tool approval overrides.",
     runtimePolicySummary: "Active runtime policy resolves to workspace {workspace}, autonomy {autonomy}, and dispatcher {dispatcher}.",
     updatesTitle: "Updates",
     updatesDescription: "Configure an updater feed, check for new desktop releases, and hand off installation to the native updater plugin.",
@@ -1498,6 +1518,24 @@ const zh = {
     ...en.settings,
     runtimeTitle: "运行时设置",
     runtimeDescription: "这些值会保存在本地，并用于下一次消息发送时的 Tauri 后端。",
+    tabs: {
+      general: {
+        label: "常规",
+        description: "桌面偏好，以及已保存运行时设置的生效方式。"
+      },
+      runtime: {
+        label: "运行时",
+        description: "管理运行时档案、套用预设，并配置模型路由、认证方式、网络访问和连接校验。"
+      },
+      agent: {
+        label: "Agent",
+        description: "控制工作区、工具执行、审批策略和高级自治边界。"
+      },
+      updates: {
+        label: "更新",
+        description: "管理桌面更新源、检查流程和安装动作。"
+      }
+    },
     toggleTheme: "切换主题",
     theme: "主题",
     darkTheme: "深色",
@@ -1636,6 +1674,8 @@ const zh = {
     alwaysAskTools: "始终询问工具",
     alwaysAskToolsPlaceholder: "shell",
     alwaysAskToolsHint: "即使之前选择过 Always，这些工具依然每次都要求审批。",
+    autonomyAdvancedTitle: "高级自治设置",
+    autonomyAdvancedDescription: "检查命令允许列表、额外目录、Shell 环境变量透传，以及工具审批覆盖规则。",
     runtimePolicySummary: "当前运行时策略解析为：工作区 {workspace}，自治级别 {autonomy}，调度器 {dispatcher}。",
     updatesTitle: "更新",
     updatesDescription: "配置更新源、检查新版本桌面应用，并把安装交给原生 updater 插件。",

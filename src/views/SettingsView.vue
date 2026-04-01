@@ -42,6 +42,14 @@ interface ProviderSuggestion {
   noteKey: string;
 }
 
+type SettingsTabKey = "general" | "runtime" | "agent" | "updates";
+
+interface SettingsTabDefinition {
+  id: SettingsTabKey;
+  labelKey: string;
+  descriptionKey: string;
+}
+
 const runtimePresets: RuntimePreset[] = [
   {
     id: "openrouter",
@@ -125,6 +133,29 @@ const providerSuggestions: ProviderSuggestion[] = runtimePresets.map((preset) =>
   noteKey: preset.noteKey
 }));
 
+const settingsTabs: SettingsTabDefinition[] = [
+  {
+    id: "general",
+    labelKey: "settings.tabs.general.label",
+    descriptionKey: "settings.tabs.general.description"
+  },
+  {
+    id: "runtime",
+    labelKey: "settings.tabs.runtime.label",
+    descriptionKey: "settings.tabs.runtime.description"
+  },
+  {
+    id: "agent",
+    labelKey: "settings.tabs.agent.label",
+    descriptionKey: "settings.tabs.agent.description"
+  },
+  {
+    id: "updates",
+    labelKey: "settings.tabs.updates.label",
+    descriptionKey: "settings.tabs.updates.description"
+  }
+];
+
 const modelSuggestionsByProvider: Record<string, string[]> = {
   openrouter: [
     "anthropic/claude-sonnet-4.6",
@@ -154,7 +185,10 @@ const settingsStore = useSettingsStore();
 const updateStore = useUpdateStore();
 const { t } = useI18n();
 const { activeProfile, profiles } = storeToRefs(settingsStore);
+const activeSettingsTab = ref<SettingsTabKey>("general");
 const showApiKey = ref(false);
+const showProxySettings = ref(false);
+const showAutonomyAdvanced = ref(false);
 const saveMessage = ref("");
 const testMessage = ref("");
 const updateMessage = ref("");
@@ -355,6 +389,9 @@ const agentSummary = computed(() =>
 const canRunUpdater = computed(
   () => updateForm.enabled && updateForm.endpoints.length > 0 && updateForm.pubkey.trim().length > 0
 );
+const activeSettingsTabMeta = computed(
+  () => settingsTabs.find((tab) => tab.id === activeSettingsTab.value) ?? settingsTabs[0]
+);
 
 watch(
   () => settingsStore.runtime,
@@ -370,6 +407,31 @@ watch(
     applyUpdateForm(settings);
   },
   { deep: true, immediate: true }
+);
+
+watch(
+  () => form.proxy.enabled,
+  (enabled) => {
+    if (enabled) {
+      showProxySettings.value = true;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => [
+    form.autonomy.level,
+    form.autonomy.allowed_roots.length,
+    form.autonomy.shell_env_passthrough.length,
+    form.autonomy.always_ask.length
+  ] as const,
+  ([level, allowedRootsCount, envCount, alwaysAskCount]) => {
+    if (level === "full" || allowedRootsCount > 0 || envCount > 0 || alwaysAskCount > 0) {
+      showAutonomyAdvanced.value = true;
+    }
+  },
+  { immediate: true }
 );
 
 watch(
@@ -966,560 +1028,609 @@ function splitDelimitedList(value: string) {
 <template>
   <div class="stack settings-page">
     <section class="panel settings-panel">
-      <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
-        <div class="stack" style="gap: 6px; max-width: 720px;">
-          <strong>{{ t("settings.runtimeTitle") }}</strong>
-          <span class="muted">{{ t("settings.runtimeDescription") }}</span>
+      <div class="stack" style="gap: 14px;">
+        <div class="stack" style="gap: 6px; max-width: 760px;">
+          <strong>{{ t(activeSettingsTabMeta.labelKey) }}</strong>
+          <span class="muted">{{ t(activeSettingsTabMeta.descriptionKey) }}</span>
         </div>
-        <div class="settings-preferences-inline">
-          <label class="settings-field settings-field--compact">
-            <span class="settings-field__label">{{ t("settings.theme") }}</span>
-            <select v-model="selectedTheme" class="select">
-              <option value="dark">{{ t("settings.darkTheme") }}</option>
-              <option value="light">{{ t("settings.lightTheme") }}</option>
-            </select>
-          </label>
-          <label class="settings-field settings-field--compact">
-            <span class="settings-field__label">{{ t("settings.language") }}</span>
-            <select v-model="selectedLocale" class="select">
-              <option value="zh">{{ t("settings.languageChinese") }}</option>
-              <option value="en">{{ t("settings.languageEnglish") }}</option>
-            </select>
-          </label>
+        <div class="settings-tabs" role="tablist">
+          <button
+            v-for="tab in settingsTabs"
+            :key="tab.id"
+            class="settings-tab"
+            type="button"
+            role="tab"
+            :aria-selected="activeSettingsTab === tab.id"
+            :data-active="activeSettingsTab === tab.id"
+            @click="activeSettingsTab = tab.id"
+          >
+            {{ t(tab.labelKey) }}
+          </button>
         </div>
       </div>
     </section>
 
-    <section class="panel settings-panel">
-      <div class="stack" style="gap: 12px;">
-        <div class="row" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap;">
+    <template v-if="activeSettingsTab === 'general'">
+      <section class="panel settings-panel">
+        <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
           <div class="stack" style="gap: 6px; max-width: 720px;">
-            <strong>{{ t("settings.profilesTitle") }}</strong>
-            <span class="muted">{{ t("settings.profilesDescription") }}</span>
+            <strong>{{ t("settings.runtimeTitle") }}</strong>
+            <span class="muted">{{ t("settings.runtimeDescription") }}</span>
           </div>
-          <div class="row settings-action-row">
-            <Button variant="secondary" :disabled="settingsStore.isImporting || settingsStore.isSaving || settingsStore.isLoading" @click="handleImportProfiles">
-              {{ settingsStore.isImporting ? t("settings.importing") : t("settings.importJson") }}
-            </Button>
-            <Button variant="secondary" :disabled="settingsStore.isExporting || settingsStore.isSaving || settingsStore.isLoading" @click="handleExportProfiles">
-              {{ settingsStore.isExporting ? t("settings.exporting") : t("settings.exportJson") }}
-            </Button>
-            <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading" @click="handleCreateProfile">{{ t("settings.newProfile") }}</Button>
-            <Button variant="secondary" :disabled="!activeProfile || settingsStore.isSaving || settingsStore.isLoading" @click="handleRenameProfile">{{ t("settings.rename") }}</Button>
-            <Button variant="secondary" :disabled="!activeProfile || settingsStore.isSaving || settingsStore.isLoading" @click="handleDeleteProfile">{{ t("settings.delete") }}</Button>
+          <div class="settings-preferences-inline">
+            <label class="settings-field settings-field--compact">
+              <span class="settings-field__label">{{ t("settings.theme") }}</span>
+              <select v-model="selectedTheme" class="select">
+                <option value="dark">{{ t("settings.darkTheme") }}</option>
+                <option value="light">{{ t("settings.lightTheme") }}</option>
+              </select>
+            </label>
+            <label class="settings-field settings-field--compact">
+              <span class="settings-field__label">{{ t("settings.language") }}</span>
+              <select v-model="selectedLocale" class="select">
+                <option value="zh">{{ t("settings.languageChinese") }}</option>
+                <option value="en">{{ t("settings.languageEnglish") }}</option>
+              </select>
+            </label>
           </div>
         </div>
-        <div class="settings-inline-note">
-          {{ t("settings.importNote") }}
+      </section>
+
+      <section class="panel settings-panel">
+        <div class="stack" style="gap: 8px;">
+          <strong>{{ t("settings.howItApplies") }}</strong>
+          <span class="muted">{{ t("settings.howItAppliesDescription") }}</span>
+          <span class="muted">{{ t("settings.howItAppliesDescription2") }}</span>
         </div>
-        <div class="profile-grid">
-          <button
-            v-for="profile in profiles"
-            :key="profile.id"
-            class="profile-card"
-            :data-active="profile.id === settingsStore.activeProfileId"
-            type="button"
-            @click="handleActivateProfile(profile.id)"
-          >
-            <div class="stack" style="gap: 6px;">
-              <strong>{{ resolveProfileName(profile.name) }}</strong>
-              <span class="muted">{{ profile.settings.provider }}</span>
-              <span class="muted">{{ profile.settings.model }}</span>
+      </section>
+    </template>
+
+    <template v-else-if="activeSettingsTab === 'runtime'">
+      <section class="panel settings-panel">
+        <div class="stack" style="gap: 12px;">
+          <div class="row" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap;">
+            <div class="stack" style="gap: 6px; max-width: 720px;">
+              <strong>{{ t("settings.profilesTitle") }}</strong>
+              <span class="muted">{{ t("settings.profilesDescription") }}</span>
             </div>
-            <span class="profile-card__badge">{{ profile.id === settingsStore.activeProfileId ? t("settings.profileActive") : t("settings.profileSwitch") }}</span>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel settings-panel">
-      <div class="stack" style="gap: 12px;">
-        <div class="stack" style="gap: 6px;">
-          <strong>{{ t("settings.presetsTitle") }}</strong>
-          <span class="muted">{{ t("settings.presetsDescription") }}</span>
-        </div>
-        <div class="preset-grid">
-          <button
-            v-for="preset in runtimePresets"
-            :key="preset.id"
-            class="preset-card"
-            type="button"
-            @click="applyPreset(preset)"
-          >
-            <div class="stack" style="gap: 6px;">
-              <strong>{{ resolvePresetLabel(preset.labelKey) }}</strong>
-              <span class="muted">{{ preset.provider }}</span>
-              <span class="muted">{{ preset.model }}</span>
+            <div class="row settings-action-row">
+              <Button variant="secondary" :disabled="settingsStore.isImporting || settingsStore.isSaving || settingsStore.isLoading" @click="handleImportProfiles">
+                {{ settingsStore.isImporting ? t("settings.importing") : t("settings.importJson") }}
+              </Button>
+              <Button variant="secondary" :disabled="settingsStore.isExporting || settingsStore.isSaving || settingsStore.isLoading" @click="handleExportProfiles">
+                {{ settingsStore.isExporting ? t("settings.exporting") : t("settings.exportJson") }}
+              </Button>
+              <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading" @click="handleCreateProfile">{{ t("settings.newProfile") }}</Button>
+              <Button variant="secondary" :disabled="!activeProfile || settingsStore.isSaving || settingsStore.isLoading" @click="handleRenameProfile">{{ t("settings.rename") }}</Button>
+              <Button variant="secondary" :disabled="!activeProfile || settingsStore.isSaving || settingsStore.isLoading" @click="handleDeleteProfile">{{ t("settings.delete") }}</Button>
             </div>
-            <p class="preset-card__note">{{ t(preset.noteKey) }}</p>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel settings-panel">
-      <div class="row" style="justify-content: space-between; align-items: flex-start; margin-bottom: 12px; flex-wrap: wrap;">
-        <div class="stack" style="gap: 4px;">
-          <strong>{{ t("settings.editingProfile", { name: resolveProfileName(activeProfile?.name) }) }}</strong>
-          <span class="muted">{{ t("settings.editingProfileDescription") }}</span>
-        </div>
-        <span class="profile-inline-badge">{{ resolveProfileName(settingsStore.status.profile_name) }}</span>
-      </div>
-
-      <datalist id="runtime-provider-options">
-        <option v-for="suggestion in providerSuggestions" :key="suggestion.id" :value="suggestion.provider">{{ resolvePresetLabel(suggestion.labelKey) }}</option>
-      </datalist>
-      <datalist id="runtime-model-options">
-        <option v-for="model in visibleModelSuggestions" :key="model" :value="model">{{ model }}</option>
-      </datalist>
-      <datalist id="runtime-auth-profile-options">
-        <option v-for="profile in authProfiles" :key="profile.id" :value="profile.profile_name">{{ profile.profile_name }}</option>
-      </datalist>
-
-      <div class="settings-grid">
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.provider") }}</span>
-          <input v-model="form.provider" list="runtime-provider-options" class="field" :placeholder="t('settings.providerPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.providerHint") }}</span>
-          <div v-if="visibleProviderSuggestions.length" class="suggestion-row">
+          </div>
+          <div class="settings-inline-note">
+            {{ t("settings.importNote") }}
+          </div>
+          <div class="profile-grid">
             <button
-              v-for="suggestion in visibleProviderSuggestions"
-              :key="suggestion.id"
-              class="suggestion-chip"
-              type="button"
-              @click="applyProviderSuggestion(suggestion)"
-            >
-              <span class="suggestion-chip__label">{{ resolvePresetLabel(suggestion.labelKey) }}</span>
-              <span class="suggestion-chip__meta">{{ suggestion.provider }}</span>
-            </button>
-          </div>
-        </label>
-
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.model") }}</span>
-          <input v-model="form.model" list="runtime-model-options" class="field" :placeholder="t('settings.modelPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.modelHint") }}</span>
-          <div v-if="visibleModelSuggestions.length" class="suggestion-row">
-            <button
-              v-for="model in visibleModelSuggestions"
-              :key="model"
-              class="suggestion-chip"
-              type="button"
-              @click="applyModelSuggestion(model)"
-            >
-              <span class="suggestion-chip__label">{{ model }}</span>
-              <span class="suggestion-chip__meta">{{ t("settings.suggested") }}</span>
-            </button>
-          </div>
-        </label>
-
-        <label class="settings-field settings-field--wide">
-          <span class="settings-field__label">{{ t("settings.providerUrl") }}</span>
-          <input v-model="form.provider_url" class="field" :placeholder="t('settings.providerUrlPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.providerUrlHint") }}</span>
-          <span class="settings-context-note">{{ providerContextHint }}</span>
-        </label>
-
-        <label v-if="currentProviderSupportsAuth && !currentProviderRequiresAuthProfile" class="settings-field">
-          <span class="settings-field__label">{{ t("settings.credentialMode") }}</span>
-          <select v-model="form.credential_mode" class="select">
-            <option value="api_key">{{ t("settings.credentialModes.apiKey") }}</option>
-            <option value="auth_profile">{{ t("settings.credentialModes.authProfile") }}</option>
-          </select>
-          <span class="muted settings-field__hint">{{ t("settings.credentialModeHint") }}</span>
-        </label>
-
-        <div v-else-if="currentProviderRequiresAuthProfile" class="settings-subsection settings-field--wide">
-          <div class="stack" style="gap: 6px;">
-            <strong>{{ t("settings.credentialModes.authProfile") }}</strong>
-            <span class="muted">{{ t("settings.authProfileRequiredHint") }}</span>
-          </div>
-        </div>
-
-        <label v-if="showAuthSettings" class="settings-field settings-field--wide">
-          <span class="settings-field__label">{{ t("settings.authProfile") }}</span>
-          <div class="row settings-secret-row">
-            <input
-              v-model="form.auth_profile"
-              list="runtime-auth-profile-options"
-              class="field"
-              :placeholder="t('settings.authProfilePlaceholder')"
-            />
-            <Button variant="secondary" :disabled="authProfilesLoading" @click="refreshAuthProfiles">
-              {{ authProfilesLoading ? t("settings.authProfilesLoading") : t("settings.refreshAuthProfiles") }}
-            </Button>
-            <Button variant="secondary" @click="handleStartAuthLogin">{{ t("settings.startAuthLogin") }}</Button>
-          </div>
-          <span class="muted settings-field__hint">{{ t("settings.authProfileHint") }}</span>
-          <span class="settings-context-note">{{ authLoginHint }}</span>
-          <div v-if="authProfiles.length" class="suggestion-row">
-            <button
-              v-for="profile in authProfiles"
+              v-for="profile in profiles"
               :key="profile.id"
-              class="suggestion-chip"
+              class="profile-card"
+              :data-active="profile.id === settingsStore.activeProfileId"
               type="button"
-              @click="handleSelectAuthProfile(profile.profile_name)"
+              @click="handleActivateProfile(profile.id)"
             >
-              <span class="suggestion-chip__label">{{ profile.profile_name }}</span>
-              <span class="suggestion-chip__meta">
-                {{ profile.is_active ? t("settings.authProfileActive") : profile.kind }}
-              </span>
+              <div class="stack" style="gap: 6px;">
+                <strong>{{ resolveProfileName(profile.name) }}</strong>
+                <span class="muted">{{ profile.settings.provider }}</span>
+                <span class="muted">{{ profile.settings.model }}</span>
+              </div>
+              <span class="profile-card__badge">{{ profile.id === settingsStore.activeProfileId ? t("settings.profileActive") : t("settings.profileSwitch") }}</span>
             </button>
           </div>
-          <span v-else-if="!authProfilesLoading" class="muted settings-field__hint">{{ t("settings.authProfilesEmpty") }}</span>
-        </label>
+        </div>
+      </section>
 
-        <div v-if="authLoginChallenge" class="settings-subsection settings-field--wide">
+      <section class="panel settings-panel">
+        <div class="stack" style="gap: 12px;">
           <div class="stack" style="gap: 6px;">
-            <strong>{{ t("settings.authLoginTitle") }}</strong>
-            <span v-if="authLoginChallenge.user_code" class="muted">{{ t("settings.authLoginCode", { code: authLoginChallenge.user_code }) }}</span>
-            <span class="muted">{{ t("settings.authLoginExpiresAt", { value: formatTimestamp(authLoginChallenge.expires_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
-            <a :href="authLoginChallenge.verification_uri_complete || authLoginChallenge.verification_uri" target="_blank" rel="noreferrer">
-              {{ t("settings.openAuthLoginPage") }}
-            </a>
-            <span v-if="authLoginChallenge.message" class="muted">{{ authLoginChallenge.message }}</span>
-            <span v-if="authLoginStatus" class="muted">
-              {{ t("settings.authLoginStatusLabel", { status: authLoginStatus.status, message: authLoginStatus.message }) }}
-            </span>
+            <strong>{{ t("settings.presetsTitle") }}</strong>
+            <span class="muted">{{ t("settings.presetsDescription") }}</span>
+          </div>
+          <div class="preset-grid">
+            <button
+              v-for="preset in runtimePresets"
+              :key="preset.id"
+              class="preset-card"
+              type="button"
+              @click="applyPreset(preset)"
+            >
+              <div class="stack" style="gap: 6px;">
+                <strong>{{ resolvePresetLabel(preset.labelKey) }}</strong>
+                <span class="muted">{{ preset.provider }}</span>
+                <span class="muted">{{ preset.model }}</span>
+              </div>
+              <p class="preset-card__note">{{ t(preset.noteKey) }}</p>
+            </button>
           </div>
         </div>
+      </section>
 
-        <label v-if="currentProviderSupportsApiKey && effectiveCredentialMode === 'api_key'" class="settings-field settings-field--wide">
-          <span class="settings-field__label">{{ t("settings.apiKey") }}</span>
-          <div class="row settings-secret-row">
-            <input
-              v-model="form.api_key"
-              :type="showApiKey ? 'text' : 'password'"
-              class="field"
-              :placeholder="t('settings.apiKeyPlaceholder')"
-            />
-            <Button variant="ghost" @click="showApiKey = !showApiKey">{{ showApiKey ? t("settings.hide") : t("settings.show") }}</Button>
+      <section class="panel settings-panel">
+        <div class="row" style="justify-content: space-between; align-items: flex-start; margin-bottom: 12px; flex-wrap: wrap;">
+          <div class="stack" style="gap: 4px;">
+            <strong>{{ t("settings.editingProfile", { name: resolveProfileName(activeProfile?.name) }) }}</strong>
+            <span class="muted">{{ t("settings.editingProfileDescription") }}</span>
           </div>
-          <span class="muted settings-field__hint">{{ t("settings.apiKeyHint") }}</span>
-        </label>
+          <span class="profile-inline-badge">{{ resolveProfileName(settingsStore.status.profile_name) }}</span>
+        </div>
 
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.temperature") }}</span>
-          <input v-model.number="form.temperature" class="field" type="number" min="0" max="2" step="0.1" />
-          <span class="muted settings-field__hint">{{ t("settings.temperatureHint") }}</span>
-        </label>
+        <datalist id="runtime-provider-options">
+          <option v-for="suggestion in providerSuggestions" :key="suggestion.id" :value="suggestion.provider">{{ resolvePresetLabel(suggestion.labelKey) }}</option>
+        </datalist>
+        <datalist id="runtime-model-options">
+          <option v-for="model in visibleModelSuggestions" :key="model" :value="model">{{ model }}</option>
+        </datalist>
+        <datalist id="runtime-auth-profile-options">
+          <option v-for="profile in authProfiles" :key="profile.id" :value="profile.profile_name">{{ profile.profile_name }}</option>
+        </datalist>
 
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.proxyEnabled") }}</span>
-          <label class="settings-checkbox">
-            <input v-model="form.proxy.enabled" type="checkbox" />
-            <span>{{ t("settings.proxyEnabledHint") }}</span>
+        <div class="settings-grid">
+          <label class="settings-field">
+            <span class="settings-field__label">{{ t("settings.provider") }}</span>
+            <input v-model="form.provider" list="runtime-provider-options" class="field" :placeholder="t('settings.providerPlaceholder')" />
+            <span class="muted settings-field__hint">{{ t("settings.providerHint") }}</span>
+            <div v-if="visibleProviderSuggestions.length" class="suggestion-row">
+              <button
+                v-for="suggestion in visibleProviderSuggestions"
+                :key="suggestion.id"
+                class="suggestion-chip"
+                type="button"
+                @click="applyProviderSuggestion(suggestion)"
+              >
+                <span class="suggestion-chip__label">{{ resolvePresetLabel(suggestion.labelKey) }}</span>
+                <span class="suggestion-chip__meta">{{ suggestion.provider }}</span>
+              </button>
+            </div>
           </label>
-        </label>
 
-        <div class="settings-subsection settings-field--wide">
-          <div class="stack" style="gap: 6px;">
+          <label class="settings-field">
+            <span class="settings-field__label">{{ t("settings.model") }}</span>
+            <input v-model="form.model" list="runtime-model-options" class="field" :placeholder="t('settings.modelPlaceholder')" />
+            <span class="muted settings-field__hint">{{ t("settings.modelHint") }}</span>
+            <div v-if="visibleModelSuggestions.length" class="suggestion-row">
+              <button
+                v-for="model in visibleModelSuggestions"
+                :key="model"
+                class="suggestion-chip"
+                type="button"
+                @click="applyModelSuggestion(model)"
+              >
+                <span class="suggestion-chip__label">{{ model }}</span>
+                <span class="suggestion-chip__meta">{{ t("settings.suggested") }}</span>
+              </button>
+            </div>
+          </label>
+
+          <label class="settings-field settings-field--wide">
+            <span class="settings-field__label">{{ t("settings.providerUrl") }}</span>
+            <input v-model="form.provider_url" class="field" :placeholder="t('settings.providerUrlPlaceholder')" />
+            <span class="muted settings-field__hint">{{ t("settings.providerUrlHint") }}</span>
+            <span class="settings-context-note">{{ providerContextHint }}</span>
+          </label>
+
+          <label v-if="currentProviderSupportsAuth && !currentProviderRequiresAuthProfile" class="settings-field">
+            <span class="settings-field__label">{{ t("settings.credentialMode") }}</span>
+            <select v-model="form.credential_mode" class="select">
+              <option value="api_key">{{ t("settings.credentialModes.apiKey") }}</option>
+              <option value="auth_profile">{{ t("settings.credentialModes.authProfile") }}</option>
+            </select>
+            <span class="muted settings-field__hint">{{ t("settings.credentialModeHint") }}</span>
+          </label>
+
+          <div v-else-if="currentProviderRequiresAuthProfile" class="settings-subsection settings-field--wide">
+            <div class="stack" style="gap: 6px;">
+              <strong>{{ t("settings.credentialModes.authProfile") }}</strong>
+              <span class="muted">{{ t("settings.authProfileRequiredHint") }}</span>
+            </div>
+          </div>
+
+          <label v-if="showAuthSettings" class="settings-field settings-field--wide">
+            <span class="settings-field__label">{{ t("settings.authProfile") }}</span>
+            <div class="row settings-secret-row">
+              <input
+                v-model="form.auth_profile"
+                list="runtime-auth-profile-options"
+                class="field"
+                :placeholder="t('settings.authProfilePlaceholder')"
+              />
+              <Button variant="secondary" :disabled="authProfilesLoading" @click="refreshAuthProfiles">
+                {{ authProfilesLoading ? t("settings.authProfilesLoading") : t("settings.refreshAuthProfiles") }}
+              </Button>
+              <Button variant="secondary" @click="handleStartAuthLogin">{{ t("settings.startAuthLogin") }}</Button>
+            </div>
+            <span class="muted settings-field__hint">{{ t("settings.authProfileHint") }}</span>
+            <span class="settings-context-note">{{ authLoginHint }}</span>
+            <div v-if="authProfiles.length" class="suggestion-row">
+              <button
+                v-for="profile in authProfiles"
+                :key="profile.id"
+                class="suggestion-chip"
+                type="button"
+                @click="handleSelectAuthProfile(profile.profile_name)"
+              >
+                <span class="suggestion-chip__label">{{ profile.profile_name }}</span>
+                <span class="suggestion-chip__meta">
+                  {{ profile.is_active ? t("settings.authProfileActive") : profile.kind }}
+                </span>
+              </button>
+            </div>
+            <span v-else-if="!authProfilesLoading" class="muted settings-field__hint">{{ t("settings.authProfilesEmpty") }}</span>
+          </label>
+
+          <div v-if="authLoginChallenge" class="settings-subsection settings-field--wide">
+            <div class="stack" style="gap: 6px;">
+              <strong>{{ t("settings.authLoginTitle") }}</strong>
+              <span v-if="authLoginChallenge.user_code" class="muted">{{ t("settings.authLoginCode", { code: authLoginChallenge.user_code }) }}</span>
+              <span class="muted">{{ t("settings.authLoginExpiresAt", { value: formatTimestamp(authLoginChallenge.expires_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+              <a :href="authLoginChallenge.verification_uri_complete || authLoginChallenge.verification_uri" target="_blank" rel="noreferrer">
+                {{ t("settings.openAuthLoginPage") }}
+              </a>
+              <span v-if="authLoginChallenge.message" class="muted">{{ authLoginChallenge.message }}</span>
+              <span v-if="authLoginStatus" class="muted">
+                {{ t("settings.authLoginStatusLabel", { status: authLoginStatus.status, message: authLoginStatus.message }) }}
+              </span>
+            </div>
+          </div>
+
+          <label v-if="currentProviderSupportsApiKey && effectiveCredentialMode === 'api_key'" class="settings-field settings-field--wide">
+            <span class="settings-field__label">{{ t("settings.apiKey") }}</span>
+            <div class="row settings-secret-row">
+              <input
+                v-model="form.api_key"
+                :type="showApiKey ? 'text' : 'password'"
+                class="field"
+                :placeholder="t('settings.apiKeyPlaceholder')"
+              />
+              <Button variant="ghost" @click="showApiKey = !showApiKey">{{ showApiKey ? t("settings.hide") : t("settings.show") }}</Button>
+            </div>
+            <span class="muted settings-field__hint">{{ t("settings.apiKeyHint") }}</span>
+          </label>
+
+          <label class="settings-field">
+            <span class="settings-field__label">{{ t("settings.temperature") }}</span>
+            <input v-model.number="form.temperature" class="field" type="number" min="0" max="2" step="0.1" />
+            <span class="muted settings-field__hint">{{ t("settings.temperatureHint") }}</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel settings-panel">
+        <button class="settings-collapsible" type="button" :aria-expanded="showProxySettings" @click="showProxySettings = !showProxySettings">
+          <div class="stack" style="gap: 6px; text-align: left;">
             <strong>{{ t("settings.proxyTitle") }}</strong>
             <span class="muted">{{ t("settings.proxyDescription") }}</span>
             <span class="settings-context-note">{{ proxySummary }}</span>
           </div>
+          <span class="profile-inline-badge">{{ showProxySettings ? t("settings.hide") : t("settings.show") }}</span>
+        </button>
+
+        <div v-if="showProxySettings" class="stack settings-collapsible__body">
+          <div class="settings-grid">
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.proxyEnabled") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="form.proxy.enabled" type="checkbox" />
+                <span>{{ t("settings.proxyEnabledHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.proxyScope") }}</span>
+              <select v-model="form.proxy.scope" class="select">
+                <option value="zeroclaw">{{ t("settings.proxyScopes.zeroclaw") }}</option>
+                <option value="services">{{ t("settings.proxyScopes.services") }}</option>
+                <option value="environment">{{ t("settings.proxyScopes.environment") }}</option>
+              </select>
+              <span class="muted settings-field__hint">{{ proxyScopeHint }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.allProxy") }}</span>
+              <input v-model="form.proxy.all_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.allProxyHint") }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.httpProxy") }}</span>
+              <input v-model="form.proxy.http_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.httpProxyHint") }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.httpsProxy") }}</span>
+              <input v-model="form.proxy.https_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.httpsProxyHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.noProxy") }}</span>
+              <input v-model="proxyNoProxyText" class="field" :placeholder="t('settings.noProxyPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.noProxyHint") }}</span>
+            </label>
+
+            <label v-if="form.proxy.scope === 'services'" class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.proxyServices") }}</span>
+              <input v-model="proxyServicesText" class="field" :placeholder="t('settings.proxyServicesPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.proxyServicesHint") }}</span>
+            </label>
+          </div>
         </div>
+      </section>
 
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.proxyScope") }}</span>
-          <select v-model="form.proxy.scope" class="select">
-            <option value="zeroclaw">{{ t("settings.proxyScopes.zeroclaw") }}</option>
-            <option value="services">{{ t("settings.proxyScopes.services") }}</option>
-            <option value="environment">{{ t("settings.proxyScopes.environment") }}</option>
-          </select>
-          <span class="muted settings-field__hint">{{ proxyScopeHint }}</span>
-        </label>
-
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.allProxy") }}</span>
-          <input v-model="form.proxy.all_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.allProxyHint") }}</span>
-        </label>
-
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.httpProxy") }}</span>
-          <input v-model="form.proxy.http_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.httpProxyHint") }}</span>
-        </label>
-
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("settings.httpsProxy") }}</span>
-          <input v-model="form.proxy.https_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.httpsProxyHint") }}</span>
-        </label>
-
-        <label class="settings-field settings-field--wide">
-          <span class="settings-field__label">{{ t("settings.noProxy") }}</span>
-          <input v-model="proxyNoProxyText" class="field" :placeholder="t('settings.noProxyPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.noProxyHint") }}</span>
-        </label>
-
-        <label v-if="form.proxy.scope === 'services'" class="settings-field settings-field--wide">
-          <span class="settings-field__label">{{ t("settings.proxyServices") }}</span>
-          <input v-model="proxyServicesText" class="field" :placeholder="t('settings.proxyServicesPlaceholder')" />
-          <span class="muted settings-field__hint">{{ t("settings.proxyServicesHint") }}</span>
-        </label>
-      </div>
-
-    </section>
-
-    <section class="panel settings-panel">
-      <div class="stack" style="gap: 12px;">
-        <div class="stack" style="gap: 6px;">
-          <strong>{{ t("settings.agentWorkspaceTitle") }}</strong>
-          <span class="muted">{{ t("settings.agentWorkspaceDescription") }}</span>
-          <span class="settings-context-note">{{ agentSummary }}</span>
+      <section class="panel settings-panel settings-runtime-actions-panel">
+        <div class="row settings-runtime-actions">
+          <div class="stack settings-runtime-actions__meta">
+            <strong>{{ t("settings.saveProfile") }}</strong>
+            <span class="muted">{{ t("settings.editingProfileDescription") }}</span>
+            <span v-if="saveMessage" class="muted">{{ saveMessage }}</span>
+            <span v-if="settingsStore.error" class="settings-error">{{ settingsStore.error }}</span>
+            <span v-if="settingsStore.lastSavedAt" class="muted">{{ t("settings.lastSavedAt", { value: formatTimestamp(settingsStore.lastSavedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+          </div>
+          <div class="row settings-action-row settings-runtime-actions__buttons">
+            <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isTesting" @click="resetForm">{{ t("settings.reset") }}</Button>
+            <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleTest">
+              {{ settingsStore.isTesting ? t("settings.testing") : t("settings.testConnection") }}
+            </Button>
+            <Button :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleSave">
+              {{ t("settings.saveProfile") }}
+            </Button>
+          </div>
         </div>
+      </section>
 
-        <div class="settings-grid">
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.workspaceDirectory") }}</span>
-            <div class="row settings-secret-row">
-              <input v-model="form.agent.workspace_dir" class="field" :placeholder="t('settings.workspaceDirectoryPlaceholder')" />
-              <Button variant="secondary" @click="handlePickWorkspace">{{ t("settings.chooseFolder") }}</Button>
+      <section class="panel settings-panel">
+        <div class="stack" style="gap: 8px;">
+          <strong>{{ t("settings.connectionTest") }}</strong>
+          <span class="muted">{{ t("settings.connectionTestDescription") }}</span>
+          <span v-if="testMessage" :class="settingsStore.testReport?.ok ? 'muted' : 'settings-error'">{{ testMessage }}</span>
+          <div v-if="settingsStore.testReport" class="settings-test-card" :data-ok="settingsStore.testReport.ok">
+            <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px;">
+              <div class="stack" style="gap: 4px;">
+                <strong>{{ settingsStore.testReport.ok ? t("settings.runtimeReachable") : t("settings.runtimeFailed") }}</strong>
+                <span class="muted">{{ t("settings.providerLabel", { value: settingsStore.testReport.provider }) }}</span>
+                <span class="muted">{{ t("settings.modelLabel", { value: settingsStore.testReport.model }) }}</span>
+              </div>
             </div>
-            <span class="muted settings-field__hint">{{ t("settings.workspaceDirectoryHint") }}</span>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.toolDispatcher") }}</span>
-            <select v-model="form.agent.tool_dispatcher" class="select">
-              <option value="auto">{{ t("settings.toolDispatchers.auto") }}</option>
-              <option value="native">{{ t("settings.toolDispatchers.native") }}</option>
-              <option value="xml">{{ t("settings.toolDispatchers.xml") }}</option>
-            </select>
-            <span class="muted settings-field__hint">{{ toolDispatcherHint }}</span>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.compactContext") }}</span>
-            <label class="settings-checkbox">
-              <input v-model="form.agent.compact_context" type="checkbox" />
-              <span>{{ t("settings.compactContextHint") }}</span>
-            </label>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.parallelTools") }}</span>
-            <label class="settings-checkbox">
-              <input v-model="form.agent.parallel_tools" type="checkbox" />
-              <span>{{ t("settings.parallelToolsHint") }}</span>
-            </label>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.maxToolIterations") }}</span>
-            <input v-model.number="form.agent.max_tool_iterations" class="field" type="number" min="1" max="50" step="1" />
-            <span class="muted settings-field__hint">{{ t("settings.maxToolIterationsHint") }}</span>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.maxHistoryMessages") }}</span>
-            <input v-model.number="form.agent.max_history_messages" class="field" type="number" min="1" max="200" step="1" />
-            <span class="muted settings-field__hint">{{ t("settings.maxHistoryMessagesHint") }}</span>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.maxContextTokens") }}</span>
-            <input v-model.number="form.agent.max_context_tokens" class="field" type="number" min="1000" max="200000" step="1000" />
-            <span class="muted settings-field__hint">{{ t("settings.maxContextTokensHint") }}</span>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.autonomyLevel") }}</span>
-            <select v-model="form.autonomy.level" class="select">
-              <option value="read_only">{{ t("settings.autonomyLevels.read_only") }}</option>
-              <option value="supervised">{{ t("settings.autonomyLevels.supervised") }}</option>
-              <option value="full">{{ t("settings.autonomyLevels.full") }}</option>
-            </select>
-            <span class="muted settings-field__hint">{{ autonomyLevelHint }}</span>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.workspaceOnly") }}</span>
-            <label class="settings-checkbox">
-              <input v-model="form.autonomy.workspace_only" type="checkbox" />
-              <span>{{ t("settings.workspaceOnlyHint") }}</span>
-            </label>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.approvalGate") }}</span>
-            <label class="settings-checkbox">
-              <input v-model="form.autonomy.require_approval_for_medium_risk" type="checkbox" />
-              <span>{{ t("settings.approvalGateHint") }}</span>
-            </label>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.blockHighRisk") }}</span>
-            <label class="settings-checkbox">
-              <input v-model="form.autonomy.block_high_risk_commands" type="checkbox" />
-              <span>{{ t("settings.blockHighRiskHint") }}</span>
-            </label>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.allowedCommands") }}</span>
-            <input v-model="autonomyAllowedCommandsText" class="field" :placeholder="t('settings.allowedCommandsPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.allowedCommandsHint") }}</span>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.allowedRoots") }}</span>
-            <textarea v-model="autonomyAllowedRootsText" class="textarea" rows="4" :placeholder="t('settings.allowedRootsPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.allowedRootsHint") }}</span>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.shellEnvPassthrough") }}</span>
-            <input v-model="autonomyEnvText" class="field" :placeholder="t('settings.shellEnvPassthroughPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.shellEnvPassthroughHint") }}</span>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.autoApproveTools") }}</span>
-            <input v-model="autonomyAutoApproveText" class="field" :placeholder="t('settings.autoApproveToolsPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.autoApproveToolsHint") }}</span>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.alwaysAskTools") }}</span>
-            <input v-model="autonomyAlwaysAskText" class="field" :placeholder="t('settings.alwaysAskToolsPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.alwaysAskToolsHint") }}</span>
-          </label>
-        </div>
-
-        <div class="settings-inline-note">
-          {{ t("settings.runtimePolicySummary", { workspace: settingsStore.status.workspace_dir || workspaceSummary, autonomy: t(`settings.autonomyLevels.${settingsStore.status.autonomy_level}`), dispatcher: t(`settings.toolDispatchers.${settingsStore.status.tool_dispatcher}`) }) }}
-        </div>
-      </div>
-    </section>
-
-    <section class="panel settings-panel settings-runtime-actions-panel">
-      <div class="row settings-runtime-actions">
-        <div class="stack settings-runtime-actions__meta">
-          <strong>{{ t("settings.saveProfile") }}</strong>
-          <span class="muted">{{ t("settings.editingProfileDescription") }}</span>
-          <span v-if="saveMessage" class="muted">{{ saveMessage }}</span>
-          <span v-if="settingsStore.error" class="settings-error">{{ settingsStore.error }}</span>
-          <span v-if="settingsStore.lastSavedAt" class="muted">{{ t("settings.lastSavedAt", { value: formatTimestamp(settingsStore.lastSavedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
-        </div>
-        <div class="row settings-action-row settings-runtime-actions__buttons">
-          <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isTesting" @click="resetForm">{{ t("settings.reset") }}</Button>
-          <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleTest">
-            {{ settingsStore.isTesting ? t("settings.testing") : t("settings.testConnection") }}
-          </Button>
-          <Button :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleSave">
-            {{ t("settings.saveProfile") }}
-          </Button>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel settings-panel">
-      <div class="stack" style="gap: 8px;">
-        <strong>{{ t("settings.connectionTest") }}</strong>
-        <span class="muted">{{ t("settings.connectionTestDescription") }}</span>
-        <span v-if="testMessage" :class="settingsStore.testReport?.ok ? 'muted' : 'settings-error'">{{ testMessage }}</span>
-        <div v-if="settingsStore.testReport" class="settings-test-card" :data-ok="settingsStore.testReport.ok">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px;">
-            <div class="stack" style="gap: 4px;">
-              <strong>{{ settingsStore.testReport.ok ? t("settings.runtimeReachable") : t("settings.runtimeFailed") }}</strong>
-              <span class="muted">{{ t("settings.providerLabel", { value: settingsStore.testReport.provider }) }}</span>
-              <span class="muted">{{ t("settings.modelLabel", { value: settingsStore.testReport.model }) }}</span>
-            </div>
-          </div>
-          <p class="settings-test-card__message">{{ settingsStore.testReport.message }}</p>
-          <div v-if="settingsStore.testReport.preview" class="code-block">{{ settingsStore.testReport.preview }}</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel settings-panel">
-      <div class="stack" style="gap: 12px;">
-        <div class="stack" style="gap: 6px;">
-          <strong>{{ t("settings.updatesTitle") }}</strong>
-          <span class="muted">{{ t("settings.updatesDescription") }}</span>
-        </div>
-
-        <div class="settings-grid">
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.updateEnabled") }}</span>
-            <label class="settings-checkbox">
-              <input v-model="updateForm.enabled" type="checkbox" />
-              <span>{{ t("settings.updateEnabledHint") }}</span>
-            </label>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.updateAutoCheck") }}</span>
-            <label class="settings-checkbox">
-              <input v-model="updateForm.auto_check" type="checkbox" :disabled="!updateForm.enabled" />
-              <span>{{ t("settings.updateAutoCheckHint") }}</span>
-            </label>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.updateEndpoints") }}</span>
-            <textarea v-model="updateEndpointsText" class="textarea" rows="4" :placeholder="t('settings.updateEndpointsPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.updateEndpointsHint") }}</span>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.updatePubkey") }}</span>
-            <textarea v-model="updateForm.pubkey" class="textarea" rows="5" :placeholder="t('settings.updatePubkeyPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.updatePubkeyHint") }}</span>
-          </label>
-        </div>
-
-        <div class="row" style="justify-content: space-between; align-items: flex-start; margin-top: 4px; flex-wrap: wrap; gap: 16px;">
-          <div class="stack" style="gap: 6px; max-width: 760px;">
-            <span v-if="updateMessage" class="muted">{{ updateMessage }}</span>
-            <span v-if="updateStore.error" class="settings-error">{{ updateStore.error }}</span>
-            <span v-if="updateStore.lastCheck" class="muted">{{ t("settings.lastCheckedAt", { value: formatTimestamp(updateStore.lastCheck.checked_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
-            <span v-if="updateStore.lastInstall" class="muted">{{ t("settings.lastUpdateInstallAt", { value: formatTimestamp(updateStore.lastInstall.checked_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
-          </div>
-          <div class="row settings-action-row">
-            <Button variant="secondary" :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling" @click="resetUpdateForm">{{ t("settings.reset") }}</Button>
-            <Button variant="secondary" :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling" @click="handleSaveUpdateSettings">
-              {{ updateStore.isSaving ? t("settings.savingUpdates") : t("settings.saveUpdates") }}
-            </Button>
-            <Button variant="secondary" :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling || !canRunUpdater" @click="handleCheckForUpdates">
-              {{ updateStore.isChecking ? t("settings.checkingUpdates") : t("settings.checkUpdates") }}
-            </Button>
-            <Button :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling || !canRunUpdater" @click="handleInstallUpdate">
-              {{ updateStore.isInstalling ? t("settings.installingUpdate") : t("settings.installUpdate") }}
-            </Button>
+            <p class="settings-test-card__message">{{ settingsStore.testReport.message }}</p>
+            <div v-if="settingsStore.testReport.preview" class="code-block">{{ settingsStore.testReport.preview }}</div>
           </div>
         </div>
+      </section>
+    </template>
 
-        <div v-if="updateStore.lastCheck" class="settings-test-card" :data-ok="updateStore.lastCheck.update_available ? 'true' : 'false'">
+    <template v-else-if="activeSettingsTab === 'agent'">
+      <section class="panel settings-panel">
+        <div class="stack" style="gap: 12px;">
           <div class="stack" style="gap: 6px;">
-            <strong>{{ updateStore.lastCheck.update_available ? t("settings.updateAvailable") : t("settings.updateUnavailable") }}</strong>
-            <span class="muted">{{ updateStore.lastCheck.message }}</span>
-            <span class="muted">{{ t("settings.currentVersionLabel", { value: updateStore.lastCheck.current_version }) }}</span>
-            <span class="muted">{{ t("settings.latestVersionLabel", { value: updateStore.lastCheck.latest_version ?? t('settings.none') }) }}</span>
-            <span v-if="updateStore.lastCheck.pub_date" class="muted">{{ t("settings.updatePublishedAt", { value: formatTimestamp(updateStore.lastCheck.pub_date, { year: 'numeric', month: '2-digit', day: '2-digit' }) }) }}</span>
-            <span v-if="updateStore.lastCheck.download_url" class="muted">{{ t("settings.updateDownloadUrl", { value: updateStore.lastCheck.download_url }) }}</span>
+            <strong>{{ t("settings.agentWorkspaceTitle") }}</strong>
+            <span class="muted">{{ t("settings.agentWorkspaceDescription") }}</span>
+            <span class="settings-context-note">{{ agentSummary }}</span>
           </div>
-          <p v-if="updateStore.lastCheck.notes" class="settings-test-card__message">{{ updateStore.lastCheck.notes }}</p>
-        </div>
 
-        <div v-if="updateStore.lastInstall" class="settings-inline-note">
-          {{ updateStore.lastInstall.message }}
-        </div>
-      </div>
-    </section>
+          <div class="settings-grid">
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.workspaceDirectory") }}</span>
+              <div class="row settings-secret-row">
+                <input v-model="form.agent.workspace_dir" class="field" :placeholder="t('settings.workspaceDirectoryPlaceholder')" />
+                <Button variant="secondary" @click="handlePickWorkspace">{{ t("settings.chooseFolder") }}</Button>
+              </div>
+              <span class="muted settings-field__hint">{{ t("settings.workspaceDirectoryHint") }}</span>
+            </label>
 
-    <section class="panel settings-panel">
-      <div class="stack" style="gap: 8px;">
-        <strong>{{ t("settings.howItApplies") }}</strong>
-        <span class="muted">{{ t("settings.howItAppliesDescription") }}</span>
-        <span class="muted">{{ t("settings.howItAppliesDescription2") }}</span>
-      </div>
-    </section>
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.toolDispatcher") }}</span>
+              <select v-model="form.agent.tool_dispatcher" class="select">
+                <option value="auto">{{ t("settings.toolDispatchers.auto") }}</option>
+                <option value="native">{{ t("settings.toolDispatchers.native") }}</option>
+                <option value="xml">{{ t("settings.toolDispatchers.xml") }}</option>
+              </select>
+              <span class="muted settings-field__hint">{{ toolDispatcherHint }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.compactContext") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="form.agent.compact_context" type="checkbox" />
+                <span>{{ t("settings.compactContextHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.parallelTools") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="form.agent.parallel_tools" type="checkbox" />
+                <span>{{ t("settings.parallelToolsHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.maxToolIterations") }}</span>
+              <input v-model.number="form.agent.max_tool_iterations" class="field" type="number" min="1" max="50" step="1" />
+              <span class="muted settings-field__hint">{{ t("settings.maxToolIterationsHint") }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.maxHistoryMessages") }}</span>
+              <input v-model.number="form.agent.max_history_messages" class="field" type="number" min="1" max="200" step="1" />
+              <span class="muted settings-field__hint">{{ t("settings.maxHistoryMessagesHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.maxContextTokens") }}</span>
+              <input v-model.number="form.agent.max_context_tokens" class="field" type="number" min="1000" max="200000" step="1000" />
+              <span class="muted settings-field__hint">{{ t("settings.maxContextTokensHint") }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.autonomyLevel") }}</span>
+              <select v-model="form.autonomy.level" class="select">
+                <option value="read_only">{{ t("settings.autonomyLevels.read_only") }}</option>
+                <option value="supervised">{{ t("settings.autonomyLevels.supervised") }}</option>
+                <option value="full">{{ t("settings.autonomyLevels.full") }}</option>
+              </select>
+              <span class="muted settings-field__hint">{{ autonomyLevelHint }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.workspaceOnly") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="form.autonomy.workspace_only" type="checkbox" />
+                <span>{{ t("settings.workspaceOnlyHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.approvalGate") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="form.autonomy.require_approval_for_medium_risk" type="checkbox" />
+                <span>{{ t("settings.approvalGateHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.blockHighRisk") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="form.autonomy.block_high_risk_commands" type="checkbox" />
+                <span>{{ t("settings.blockHighRiskHint") }}</span>
+              </label>
+            </label>
+          </div>
+
+          <div class="settings-inline-note">
+            {{ t("settings.runtimePolicySummary", { workspace: settingsStore.status.workspace_dir || workspaceSummary, autonomy: t(`settings.autonomyLevels.${settingsStore.status.autonomy_level}`), dispatcher: t(`settings.toolDispatchers.${settingsStore.status.tool_dispatcher}`) }) }}
+          </div>
+        </div>
+      </section>
+
+      <section class="panel settings-panel">
+        <button class="settings-collapsible" type="button" :aria-expanded="showAutonomyAdvanced" @click="showAutonomyAdvanced = !showAutonomyAdvanced">
+          <div class="stack" style="gap: 6px; text-align: left;">
+            <strong>{{ t("settings.autonomyAdvancedTitle") }}</strong>
+            <span class="muted">{{ t("settings.autonomyAdvancedDescription") }}</span>
+          </div>
+          <span class="profile-inline-badge">{{ showAutonomyAdvanced ? t("settings.hide") : t("settings.show") }}</span>
+        </button>
+
+        <div v-if="showAutonomyAdvanced" class="stack settings-collapsible__body">
+          <div class="settings-grid">
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.allowedCommands") }}</span>
+              <input v-model="autonomyAllowedCommandsText" class="field" :placeholder="t('settings.allowedCommandsPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.allowedCommandsHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.allowedRoots") }}</span>
+              <textarea v-model="autonomyAllowedRootsText" class="textarea" rows="4" :placeholder="t('settings.allowedRootsPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.allowedRootsHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.shellEnvPassthrough") }}</span>
+              <input v-model="autonomyEnvText" class="field" :placeholder="t('settings.shellEnvPassthroughPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.shellEnvPassthroughHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.autoApproveTools") }}</span>
+              <input v-model="autonomyAutoApproveText" class="field" :placeholder="t('settings.autoApproveToolsPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.autoApproveToolsHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.alwaysAskTools") }}</span>
+              <input v-model="autonomyAlwaysAskText" class="field" :placeholder="t('settings.alwaysAskToolsPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.alwaysAskToolsHint") }}</span>
+            </label>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <template v-else-if="activeSettingsTab === 'updates'">
+      <section class="panel settings-panel">
+        <div class="stack" style="gap: 12px;">
+          <div class="stack" style="gap: 6px;">
+            <strong>{{ t("settings.updatesTitle") }}</strong>
+            <span class="muted">{{ t("settings.updatesDescription") }}</span>
+          </div>
+
+          <div class="settings-grid">
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.updateEnabled") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="updateForm.enabled" type="checkbox" />
+                <span>{{ t("settings.updateEnabledHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.updateAutoCheck") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="updateForm.auto_check" type="checkbox" :disabled="!updateForm.enabled" />
+                <span>{{ t("settings.updateAutoCheckHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.updateEndpoints") }}</span>
+              <textarea v-model="updateEndpointsText" class="textarea" rows="4" :placeholder="t('settings.updateEndpointsPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.updateEndpointsHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.updatePubkey") }}</span>
+              <textarea v-model="updateForm.pubkey" class="textarea" rows="5" :placeholder="t('settings.updatePubkeyPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.updatePubkeyHint") }}</span>
+            </label>
+          </div>
+
+          <div class="row" style="justify-content: space-between; align-items: flex-start; margin-top: 4px; flex-wrap: wrap; gap: 16px;">
+            <div class="stack" style="gap: 6px; max-width: 760px;">
+              <span v-if="updateMessage" class="muted">{{ updateMessage }}</span>
+              <span v-if="updateStore.error" class="settings-error">{{ updateStore.error }}</span>
+              <span v-if="updateStore.lastCheck" class="muted">{{ t("settings.lastCheckedAt", { value: formatTimestamp(updateStore.lastCheck.checked_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+              <span v-if="updateStore.lastInstall" class="muted">{{ t("settings.lastUpdateInstallAt", { value: formatTimestamp(updateStore.lastInstall.checked_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+            </div>
+            <div class="row settings-action-row">
+              <Button variant="secondary" :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling" @click="resetUpdateForm">{{ t("settings.reset") }}</Button>
+              <Button variant="secondary" :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling" @click="handleSaveUpdateSettings">
+                {{ updateStore.isSaving ? t("settings.savingUpdates") : t("settings.saveUpdates") }}
+              </Button>
+              <Button variant="secondary" :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling || !canRunUpdater" @click="handleCheckForUpdates">
+                {{ updateStore.isChecking ? t("settings.checkingUpdates") : t("settings.checkUpdates") }}
+              </Button>
+              <Button :disabled="updateStore.isSaving || updateStore.isChecking || updateStore.isInstalling || !canRunUpdater" @click="handleInstallUpdate">
+                {{ updateStore.isInstalling ? t("settings.installingUpdate") : t("settings.installUpdate") }}
+              </Button>
+            </div>
+          </div>
+
+          <div v-if="updateStore.lastCheck" class="settings-test-card" :data-ok="updateStore.lastCheck.update_available ? 'true' : 'false'">
+            <div class="stack" style="gap: 6px;">
+              <strong>{{ updateStore.lastCheck.update_available ? t("settings.updateAvailable") : t("settings.updateUnavailable") }}</strong>
+              <span class="muted">{{ updateStore.lastCheck.message }}</span>
+              <span class="muted">{{ t("settings.currentVersionLabel", { value: updateStore.lastCheck.current_version }) }}</span>
+              <span class="muted">{{ t("settings.latestVersionLabel", { value: updateStore.lastCheck.latest_version ?? t('settings.none') }) }}</span>
+              <span v-if="updateStore.lastCheck.pub_date" class="muted">{{ t("settings.updatePublishedAt", { value: formatTimestamp(updateStore.lastCheck.pub_date, { year: 'numeric', month: '2-digit', day: '2-digit' }) }) }}</span>
+              <span v-if="updateStore.lastCheck.download_url" class="muted">{{ t("settings.updateDownloadUrl", { value: updateStore.lastCheck.download_url }) }}</span>
+            </div>
+            <p v-if="updateStore.lastCheck.notes" class="settings-test-card__message">{{ updateStore.lastCheck.notes }}</p>
+          </div>
+
+          <div v-if="updateStore.lastInstall" class="settings-inline-note">
+            {{ updateStore.lastInstall.message }}
+          </div>
+        </div>
+      </section>
+    </template>
   </div>
 </template>
-
-
