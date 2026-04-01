@@ -1,8 +1,20 @@
 <script setup lang="ts">
 import { storeToRefs } from "pinia";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { pickRuntimeWorkspace, type RuntimeSettingsRecord, type UpdateSettingsRecord } from "@/api/tauri";
+import {
+  getAuthLoginStatus,
+  listAuthProfiles,
+  openExternalUrl,
+  pickRuntimeWorkspace,
+  startAuthLogin,
+  type AuthLoginChallengeRecord,
+  type AuthLoginStatusRecord,
+  type AuthProfileRecord,
+  type RuntimeCredentialModeRecord,
+  type RuntimeSettingsRecord,
+  type UpdateSettingsRecord
+} from "@/api/tauri";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
 import { useAppStore } from "@/stores/app";
@@ -11,19 +23,21 @@ import { defaultUpdateSettings, useUpdateStore } from "@/stores/update";
 
 interface RuntimePreset {
   id: string;
-  label: string;
+  labelKey: string;
   provider: string;
   model: string;
   providerUrl: string;
+  credentialMode: RuntimeCredentialModeRecord;
   temperature: number;
   noteKey: string;
 }
 
 interface ProviderSuggestion {
   id: string;
-  label: string;
+  labelKey: string;
   provider: string;
   providerUrl: string;
+  credentialMode: RuntimeCredentialModeRecord;
   defaultModel: string;
   noteKey: string;
 }
@@ -31,46 +45,71 @@ interface ProviderSuggestion {
 const runtimePresets: RuntimePreset[] = [
   {
     id: "openrouter",
-    label: "OpenRouter",
+    labelKey: "settings.presetLabels.openrouter",
     provider: "openrouter",
     model: "anthropic/claude-sonnet-4.6",
     providerUrl: "",
+    credentialMode: "api_key",
     temperature: 0.7,
     noteKey: "settings.presetNotes.openrouter"
   },
   {
     id: "openai",
-    label: "OpenAI",
+    labelKey: "settings.presetLabels.openai",
     provider: "openai",
     model: "gpt-4o-mini",
     providerUrl: "",
+    credentialMode: "api_key",
     temperature: 0.7,
     noteKey: "settings.presetNotes.openai"
   },
   {
+    id: "openai-codex",
+    labelKey: "settings.presetLabels.openaiCodex",
+    provider: "openai-codex",
+    model: "gpt-5.4",
+    providerUrl: "",
+    credentialMode: "auth_profile",
+    temperature: 0.7,
+    noteKey: "settings.presetNotes.openaiCodex"
+  },
+  {
+    id: "gemini",
+    labelKey: "settings.presetLabels.gemini",
+    provider: "gemini",
+    model: "gemini-2.5-pro",
+    providerUrl: "",
+    credentialMode: "auth_profile",
+    temperature: 0.7,
+    noteKey: "settings.presetNotes.gemini"
+  },
+  {
     id: "anthropic",
-    label: "Anthropic",
+    labelKey: "settings.presetLabels.anthropic",
     provider: "anthropic",
     model: "claude-sonnet-4-5",
     providerUrl: "",
+    credentialMode: "api_key",
     temperature: 0.7,
     noteKey: "settings.presetNotes.anthropic"
   },
   {
     id: "ollama",
-    label: "Local Ollama",
+    labelKey: "settings.presetLabels.ollama",
     provider: "ollama",
     model: "qwen2.5-coder:7b",
     providerUrl: "http://127.0.0.1:11434",
+    credentialMode: "api_key",
     temperature: 0.3,
     noteKey: "settings.presetNotes.ollama"
   },
   {
     id: "custom-endpoint",
-    label: "Custom Endpoint",
+    labelKey: "settings.presetLabels.custom",
     provider: "custom:https://your-endpoint.example/v1",
     model: "gpt-4o-mini",
     providerUrl: "https://your-endpoint.example/v1",
+    credentialMode: "api_key",
     temperature: 0.7,
     noteKey: "settings.presetNotes.custom"
   }
@@ -78,9 +117,10 @@ const runtimePresets: RuntimePreset[] = [
 
 const providerSuggestions: ProviderSuggestion[] = runtimePresets.map((preset) => ({
   id: preset.id,
-  label: preset.label,
+  labelKey: preset.labelKey,
   provider: preset.provider,
   providerUrl: preset.providerUrl,
+  credentialMode: preset.credentialMode,
   defaultModel: preset.model,
   noteKey: preset.noteKey
 }));
@@ -93,6 +133,16 @@ const modelSuggestionsByProvider: Record<string, string[]> = {
     "google/gemini-2.5-pro",
     "meta-llama/llama-3.3-70b-instruct"
   ],
+  "openai-codex": [
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.2-codex",
+    "gpt-5.2",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex-mini"
+  ],
+  gemini: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
   anthropic: ["claude-sonnet-4-5", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
   ollama: ["qwen2.5-coder:7b", "qwen2.5:14b", "llama3.1:8b", "deepseek-r1:8b"],
@@ -102,17 +152,37 @@ const modelSuggestionsByProvider: Record<string, string[]> = {
 const appStore = useAppStore();
 const settingsStore = useSettingsStore();
 const updateStore = useUpdateStore();
-const { t, locale } = useI18n();
+const { t } = useI18n();
 const { activeProfile, profiles } = storeToRefs(settingsStore);
 const showApiKey = ref(false);
 const saveMessage = ref("");
 const testMessage = ref("");
 const updateMessage = ref("");
+const authProfiles = ref<AuthProfileRecord[]>([]);
+const authProfilesLoading = ref(false);
+const authLoginChallenge = ref<AuthLoginChallengeRecord | null>(null);
+const authLoginStatus = ref<AuthLoginStatusRecord | null>(null);
+const authPollingHandle = ref<number | null>(null);
 
 const form = reactive(defaultRuntimeSettings());
 const updateForm = reactive(defaultUpdateSettings());
 
 const currentProviderKey = computed(() => resolveProviderKey(form.provider));
+const currentProviderSupportsAuth = computed(() => currentProviderKey.value === "openai-codex" || currentProviderKey.value === "gemini");
+const currentProviderRequiresAuthProfile = computed(() => currentProviderKey.value === "openai-codex");
+const currentProviderSupportsApiKey = computed(() => currentProviderKey.value !== "openai-codex");
+const effectiveCredentialMode = computed<RuntimeCredentialModeRecord>(() => {
+  if (currentProviderRequiresAuthProfile.value) {
+    return "auth_profile";
+  }
+
+  if (!currentProviderSupportsAuth.value) {
+    return "api_key";
+  }
+
+  return form.credential_mode;
+});
+const showAuthSettings = computed(() => currentProviderSupportsAuth.value && effectiveCredentialMode.value === "auth_profile");
 const selectedTheme = computed({
   get: () => appStore.theme,
   set: (value) => {
@@ -185,7 +255,7 @@ const visibleProviderSuggestions = computed(() => {
 
   return providerSuggestions
     .filter((suggestion) => {
-      const haystack = `${suggestion.label} ${suggestion.provider} ${t(suggestion.noteKey)}`.toLowerCase();
+      const haystack = `${resolvePresetLabel(suggestion.labelKey)} ${suggestion.provider} ${t(suggestion.noteKey)}`.toLowerCase();
       return haystack.includes(query);
     })
     .slice(0, 5);
@@ -257,6 +327,14 @@ const toolDispatcherHint = computed(() => {
       return t("settings.toolDispatcherHints.auto");
   }
 });
+const authLoginHint = computed(() => {
+  switch (currentProviderKey.value) {
+    case "gemini":
+      return t("settings.authLoginHints.gemini");
+    default:
+      return t("settings.authLoginHints.openaiCodex");
+  }
+});
 const autonomyLevelHint = computed(() => {
   switch (form.autonomy.level) {
     case "read_only":
@@ -294,6 +372,36 @@ watch(
   { deep: true, immediate: true }
 );
 
+watch(
+  [currentProviderKey, effectiveCredentialMode],
+  async ([providerKey, credentialMode]) => {
+    if (providerKey === "openai-codex") {
+      form.credential_mode = "auth_profile";
+    } else if (providerKey !== "gemini") {
+      form.credential_mode = "api_key";
+    }
+
+    if (providerKey !== "openai-codex" && providerKey !== "gemini") {
+      stopAuthLoginPolling();
+      authProfiles.value = [];
+      authLoginChallenge.value = null;
+      authLoginStatus.value = null;
+      return;
+    }
+
+    if (credentialMode === "auth_profile") {
+      await refreshAuthProfiles();
+      return;
+    }
+
+    stopAuthLoginPolling();
+    authProfiles.value = [];
+    authLoginChallenge.value = null;
+    authLoginStatus.value = null;
+  },
+  { immediate: true }
+);
+
 onMounted(async () => {
   if (!settingsStore.loaded) {
     try {
@@ -312,16 +420,24 @@ onMounted(async () => {
   }
 });
 
+onBeforeUnmount(() => {
+  stopAuthLoginPolling();
+});
+
 function resolveProfileName(name: string | null | undefined) {
   if (!name) {
-    return locale.value === "zh" ? "当前档案" : "active profile";
+    return t("settings.profileNames.current");
   }
 
   if (name === "Default" || name === "默认") {
-    return locale.value === "zh" ? "默认档案" : "Default profile";
+    return t("settings.profileNames.default");
   }
 
   return name;
+}
+
+function resolvePresetLabel(labelKey: string) {
+  return t(labelKey);
 }
 
 async function handleSave() {
@@ -365,14 +481,150 @@ async function handlePickWorkspace() {
   }
 }
 
+async function refreshAuthProfiles() {
+  if (!showAuthSettings.value) {
+    authProfiles.value = [];
+    return;
+  }
+
+  authProfilesLoading.value = true;
+
+  try {
+    const state = await listAuthProfiles(form.provider);
+    authProfiles.value = state.profiles;
+  } catch {
+    authProfiles.value = [];
+    saveMessage.value = t("settings.feedback.authProfilesLoadFailed");
+  } finally {
+    authProfilesLoading.value = false;
+  }
+}
+
+function stopAuthLoginPolling() {
+  if (authPollingHandle.value !== null) {
+    window.clearInterval(authPollingHandle.value);
+    authPollingHandle.value = null;
+  }
+}
+
+function describeUnknownError(error: unknown) {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    if ("message" in error && typeof error.message === "string") {
+      return error.message;
+    }
+
+    if ("cause" in error && typeof error.cause === "string") {
+      return error.cause;
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  return String(error);
+}
+
+function startAuthLoginPolling(loginId: string, intervalSeconds: number) {
+  stopAuthLoginPolling();
+  authPollingHandle.value = window.setInterval(() => {
+    void pollAuthLoginStatus(loginId);
+  }, Math.max(intervalSeconds, 2) * 1000);
+}
+
+async function pollAuthLoginStatus(loginId?: string) {
+  const target = loginId ?? authLoginChallenge.value?.login_id;
+  if (!target) {
+    return;
+  }
+
+  try {
+    const status = await getAuthLoginStatus(target);
+    authLoginStatus.value = status;
+
+    if (status.status === "pending") {
+      return;
+    }
+
+    stopAuthLoginPolling();
+    await refreshAuthProfiles();
+
+    if (status.status === "succeeded") {
+      form.auth_profile = status.profile_name;
+      saveMessage.value = t("settings.feedback.authLoginSucceeded", { name: status.profile_name });
+      return;
+    }
+
+    saveMessage.value = t("settings.feedback.authLoginFailed", { message: status.message });
+  } catch {
+    stopAuthLoginPolling();
+    saveMessage.value = t("settings.feedback.authLoginStatusFailed");
+  }
+}
+
+async function handleStartAuthLogin() {
+  if (!showAuthSettings.value) {
+    return;
+  }
+
+  saveMessage.value = "";
+  authLoginStatus.value = null;
+
+  try {
+    const challenge = await startAuthLogin(form.provider, form.auth_profile.trim() || "default");
+    authLoginChallenge.value = challenge;
+    form.auth_profile = challenge.profile_name;
+    const loginUrl = challenge.verification_uri_complete || challenge.verification_uri;
+
+    if (loginUrl) {
+      try {
+        await openExternalUrl(loginUrl);
+      } catch (error) {
+        saveMessage.value = t("settings.feedback.authLoginOpenFailed", {
+          message: describeUnknownError(error)
+        });
+      }
+    }
+
+    if (!saveMessage.value) {
+      saveMessage.value = t("settings.feedback.authLoginStarted", {
+        provider: challenge.provider,
+        code: challenge.user_code
+      });
+    }
+    startAuthLoginPolling(challenge.login_id, challenge.interval_seconds);
+    void pollAuthLoginStatus(challenge.login_id);
+  } catch (error) {
+    saveMessage.value = t("settings.feedback.authLoginStartFailed", {
+      message: describeUnknownError(error)
+    });
+  }
+}
+
+function handleSelectAuthProfile(profileName: string) {
+  form.auth_profile = profileName;
+  saveMessage.value = t("settings.feedback.authProfileSelected", { name: profileName });
+}
+
 function applyPreset(preset: RuntimePreset) {
   Object.assign(form, {
     provider: preset.provider,
     model: preset.model,
     provider_url: preset.providerUrl,
+    credential_mode: preset.credentialMode,
     temperature: preset.temperature
   });
-  saveMessage.value = t("settings.feedback.presetLoaded", { name: preset.label });
+  saveMessage.value = t("settings.feedback.presetLoaded", { name: resolvePresetLabel(preset.labelKey) });
   testMessage.value = "";
   settingsStore.testReport = null;
 }
@@ -380,8 +632,9 @@ function applyPreset(preset: RuntimePreset) {
 function applyProviderSuggestion(suggestion: ProviderSuggestion) {
   form.provider = suggestion.provider;
   form.provider_url = suggestion.providerUrl;
+  form.credential_mode = suggestion.credentialMode;
   form.model = suggestion.defaultModel;
-  saveMessage.value = t("settings.feedback.providerSuggestionLoaded", { name: suggestion.label });
+  saveMessage.value = t("settings.feedback.providerSuggestionLoaded", { name: resolvePresetLabel(suggestion.labelKey) });
   testMessage.value = "";
   settingsStore.testReport = null;
 }
@@ -413,7 +666,7 @@ async function handleActivateProfile(profileId: string) {
 }
 
 async function handleCreateProfile() {
-  const defaultName = locale.value === "zh" ? `档案 ${profiles.value.length + 1}` : `Profile ${profiles.value.length + 1}`;
+  const defaultName = t("settings.profileNames.generated", { count: profiles.value.length + 1 });
   const name = window.prompt(t("settings.prompts.newProfileName"), defaultName)?.trim();
   if (!name) {
     return;
@@ -510,6 +763,9 @@ async function handleExportProfiles() {
 
 function resetForm() {
   applyForm(settingsStore.runtime);
+  stopAuthLoginPolling();
+  authLoginChallenge.value = null;
+  authLoginStatus.value = null;
   saveMessage.value = t("settings.feedback.resetUnsaved");
   testMessage.value = "";
   settingsStore.testReport = null;
@@ -561,6 +817,14 @@ function resolveProviderKey(value: string) {
     return "custom-endpoint";
   }
 
+  if (normalized.includes("openai-codex") || normalized.includes("openai_codex") || normalized === "codex") {
+    return "openai-codex";
+  }
+
+  if (normalized.includes("gemini") || normalized.includes("google")) {
+    return "gemini";
+  }
+
   if (normalized.includes("openrouter")) {
     return "openrouter";
   }
@@ -598,6 +862,8 @@ function cloneRuntimeSettings(runtime: RuntimeSettingsRecord): RuntimeSettingsRe
     model: runtime.model,
     provider_url: runtime.provider_url,
     api_key: runtime.api_key,
+    credential_mode: runtime.credential_mode ?? defaults.credential_mode,
+    auth_profile: runtime.auth_profile ?? defaults.auth_profile,
     temperature: runtime.temperature,
     proxy: {
       ...defaults.proxy,
@@ -638,6 +904,8 @@ function buildRuntimeSettingsPayload(): RuntimeSettingsRecord {
     model: form.model,
     provider_url: form.provider_url,
     api_key: form.api_key,
+    credential_mode: effectiveCredentialMode.value,
+    auth_profile: form.auth_profile,
     temperature: Number(form.temperature),
     proxy: {
       enabled: form.proxy.enabled,
@@ -779,7 +1047,7 @@ function splitDelimitedList(value: string) {
             @click="applyPreset(preset)"
           >
             <div class="stack" style="gap: 6px;">
-              <strong>{{ preset.label }}</strong>
+              <strong>{{ resolvePresetLabel(preset.labelKey) }}</strong>
               <span class="muted">{{ preset.provider }}</span>
               <span class="muted">{{ preset.model }}</span>
             </div>
@@ -799,10 +1067,13 @@ function splitDelimitedList(value: string) {
       </div>
 
       <datalist id="runtime-provider-options">
-        <option v-for="suggestion in providerSuggestions" :key="suggestion.id" :value="suggestion.provider">{{ suggestion.label }}</option>
+        <option v-for="suggestion in providerSuggestions" :key="suggestion.id" :value="suggestion.provider">{{ resolvePresetLabel(suggestion.labelKey) }}</option>
       </datalist>
       <datalist id="runtime-model-options">
         <option v-for="model in visibleModelSuggestions" :key="model" :value="model">{{ model }}</option>
+      </datalist>
+      <datalist id="runtime-auth-profile-options">
+        <option v-for="profile in authProfiles" :key="profile.id" :value="profile.profile_name">{{ profile.profile_name }}</option>
       </datalist>
 
       <div class="settings-grid">
@@ -818,7 +1089,7 @@ function splitDelimitedList(value: string) {
               type="button"
               @click="applyProviderSuggestion(suggestion)"
             >
-              <span class="suggestion-chip__label">{{ suggestion.label }}</span>
+              <span class="suggestion-chip__label">{{ resolvePresetLabel(suggestion.labelKey) }}</span>
               <span class="suggestion-chip__meta">{{ suggestion.provider }}</span>
             </button>
           </div>
@@ -849,7 +1120,71 @@ function splitDelimitedList(value: string) {
           <span class="settings-context-note">{{ providerContextHint }}</span>
         </label>
 
-        <label class="settings-field settings-field--wide">
+        <label v-if="currentProviderSupportsAuth && !currentProviderRequiresAuthProfile" class="settings-field">
+          <span class="settings-field__label">{{ t("settings.credentialMode") }}</span>
+          <select v-model="form.credential_mode" class="select">
+            <option value="api_key">{{ t("settings.credentialModes.apiKey") }}</option>
+            <option value="auth_profile">{{ t("settings.credentialModes.authProfile") }}</option>
+          </select>
+          <span class="muted settings-field__hint">{{ t("settings.credentialModeHint") }}</span>
+        </label>
+
+        <div v-else-if="currentProviderRequiresAuthProfile" class="settings-subsection settings-field--wide">
+          <div class="stack" style="gap: 6px;">
+            <strong>{{ t("settings.credentialModes.authProfile") }}</strong>
+            <span class="muted">{{ t("settings.authProfileRequiredHint") }}</span>
+          </div>
+        </div>
+
+        <label v-if="showAuthSettings" class="settings-field settings-field--wide">
+          <span class="settings-field__label">{{ t("settings.authProfile") }}</span>
+          <div class="row settings-secret-row">
+            <input
+              v-model="form.auth_profile"
+              list="runtime-auth-profile-options"
+              class="field"
+              :placeholder="t('settings.authProfilePlaceholder')"
+            />
+            <Button variant="secondary" :disabled="authProfilesLoading" @click="refreshAuthProfiles">
+              {{ authProfilesLoading ? t("settings.authProfilesLoading") : t("settings.refreshAuthProfiles") }}
+            </Button>
+            <Button variant="secondary" @click="handleStartAuthLogin">{{ t("settings.startAuthLogin") }}</Button>
+          </div>
+          <span class="muted settings-field__hint">{{ t("settings.authProfileHint") }}</span>
+          <span class="settings-context-note">{{ authLoginHint }}</span>
+          <div v-if="authProfiles.length" class="suggestion-row">
+            <button
+              v-for="profile in authProfiles"
+              :key="profile.id"
+              class="suggestion-chip"
+              type="button"
+              @click="handleSelectAuthProfile(profile.profile_name)"
+            >
+              <span class="suggestion-chip__label">{{ profile.profile_name }}</span>
+              <span class="suggestion-chip__meta">
+                {{ profile.is_active ? t("settings.authProfileActive") : profile.kind }}
+              </span>
+            </button>
+          </div>
+          <span v-else-if="!authProfilesLoading" class="muted settings-field__hint">{{ t("settings.authProfilesEmpty") }}</span>
+        </label>
+
+        <div v-if="authLoginChallenge" class="settings-subsection settings-field--wide">
+          <div class="stack" style="gap: 6px;">
+            <strong>{{ t("settings.authLoginTitle") }}</strong>
+            <span v-if="authLoginChallenge.user_code" class="muted">{{ t("settings.authLoginCode", { code: authLoginChallenge.user_code }) }}</span>
+            <span class="muted">{{ t("settings.authLoginExpiresAt", { value: formatTimestamp(authLoginChallenge.expires_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+            <a :href="authLoginChallenge.verification_uri_complete || authLoginChallenge.verification_uri" target="_blank" rel="noreferrer">
+              {{ t("settings.openAuthLoginPage") }}
+            </a>
+            <span v-if="authLoginChallenge.message" class="muted">{{ authLoginChallenge.message }}</span>
+            <span v-if="authLoginStatus" class="muted">
+              {{ t("settings.authLoginStatusLabel", { status: authLoginStatus.status, message: authLoginStatus.message }) }}
+            </span>
+          </div>
+        </div>
+
+        <label v-if="currentProviderSupportsApiKey && effectiveCredentialMode === 'api_key'" class="settings-field settings-field--wide">
           <span class="settings-field__label">{{ t("settings.apiKey") }}</span>
           <div class="row settings-secret-row">
             <input
@@ -926,22 +1261,6 @@ function splitDelimitedList(value: string) {
         </label>
       </div>
 
-      <div class="row" style="justify-content: space-between; align-items: flex-start; margin-top: 20px; flex-wrap: wrap;">
-        <div class="stack" style="gap: 6px; max-width: 720px;">
-          <span v-if="saveMessage" class="muted">{{ saveMessage }}</span>
-          <span v-if="settingsStore.error" class="settings-error">{{ settingsStore.error }}</span>
-          <span v-if="settingsStore.lastSavedAt" class="muted">{{ t("settings.lastSavedAt", { value: formatTimestamp(settingsStore.lastSavedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
-        </div>
-        <div class="row settings-action-row">
-          <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isTesting" @click="resetForm">{{ t("settings.reset") }}</Button>
-          <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleTest">
-            {{ settingsStore.isTesting ? t("settings.testing") : t("settings.testConnection") }}
-          </Button>
-          <Button :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleSave">
-            {{ t("settings.saveProfile") }}
-          </Button>
-        </div>
-      </div>
     </section>
 
     <section class="panel settings-panel">
@@ -1077,6 +1396,27 @@ function splitDelimitedList(value: string) {
       </div>
     </section>
 
+    <section class="panel settings-panel settings-runtime-actions-panel">
+      <div class="row settings-runtime-actions">
+        <div class="stack settings-runtime-actions__meta">
+          <strong>{{ t("settings.saveProfile") }}</strong>
+          <span class="muted">{{ t("settings.editingProfileDescription") }}</span>
+          <span v-if="saveMessage" class="muted">{{ saveMessage }}</span>
+          <span v-if="settingsStore.error" class="settings-error">{{ settingsStore.error }}</span>
+          <span v-if="settingsStore.lastSavedAt" class="muted">{{ t("settings.lastSavedAt", { value: formatTimestamp(settingsStore.lastSavedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+        </div>
+        <div class="row settings-action-row settings-runtime-actions__buttons">
+          <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isTesting" @click="resetForm">{{ t("settings.reset") }}</Button>
+          <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleTest">
+            {{ settingsStore.isTesting ? t("settings.testing") : t("settings.testConnection") }}
+          </Button>
+          <Button :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleSave">
+            {{ t("settings.saveProfile") }}
+          </Button>
+        </div>
+      </div>
+    </section>
+
     <section class="panel settings-panel">
       <div class="stack" style="gap: 8px;">
         <strong>{{ t("settings.connectionTest") }}</strong>
@@ -1181,14 +1521,5 @@ function splitDelimitedList(value: string) {
     </section>
   </div>
 </template>
-
-
-
-
-
-
-
-
-
 
 

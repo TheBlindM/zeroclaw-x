@@ -604,6 +604,27 @@ a {
   flex-wrap: wrap;
 }
 
+.settings-runtime-actions-panel {
+  padding: 20px 18px;
+  border-style: dashed;
+}
+
+.settings-runtime-actions {
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.settings-runtime-actions__meta {
+  gap: 6px;
+  max-width: 760px;
+}
+
+.settings-runtime-actions__buttons {
+  justify-content: flex-end;
+}
+
 .settings-inline-note {
   padding: 12px 14px;
   border: 1px dashed var(--border);
@@ -686,6 +707,17 @@ a {
 
 .settings-checkbox input {
   margin-top: 3px;
+}
+
+@media (max-width: 720px) {
+  .settings-runtime-actions__buttons {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .settings-runtime-actions__buttons .btn {
+    flex: 1;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1486,4 +1518,3 @@ a {
     grid-template-columns: 1fr;
   }
 }
-
