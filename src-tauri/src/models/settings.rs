@@ -18,6 +18,14 @@ pub enum RuntimeAutonomyLevelRecord {
     Full,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCredentialModeRecord {
+    #[default]
+    ApiKey,
+    AuthProfile,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RuntimeProxySettingsRecord {
@@ -63,6 +71,8 @@ pub struct RuntimeSettingsRecord {
     pub model: String,
     pub provider_url: String,
     pub api_key: String,
+    pub credential_mode: RuntimeCredentialModeRecord,
+    pub auth_profile: String,
     pub temperature: f64,
     pub proxy: RuntimeProxySettingsRecord,
     pub agent: RuntimeAgentSettingsRecord,
@@ -113,6 +123,8 @@ pub struct RuntimeStatusRecord {
     pub provider_url: String,
     pub temperature: f64,
     pub api_key_configured: bool,
+    pub credential_mode: RuntimeCredentialModeRecord,
+    pub auth_profile: String,
     pub workspace_dir: String,
     pub tool_dispatcher: String,
     pub autonomy_level: RuntimeAutonomyLevelRecord,
@@ -185,6 +197,8 @@ impl Default for RuntimeSettingsRecord {
             model: "anthropic/claude-sonnet-4.6".to_string(),
             provider_url: String::new(),
             api_key: String::new(),
+            credential_mode: RuntimeCredentialModeRecord::ApiKey,
+            auth_profile: String::new(),
             temperature: 0.7,
             proxy: RuntimeProxySettingsRecord::default(),
             agent: RuntimeAgentSettingsRecord::default(),
@@ -220,6 +234,7 @@ impl RuntimeSettingsRecord {
 
         self.provider_url = self.provider_url.trim().to_string();
         self.api_key = self.api_key.trim().to_string();
+        self.auth_profile = self.auth_profile.trim().to_string();
 
         if !self.temperature.is_finite() {
             self.temperature = Self::default().temperature;

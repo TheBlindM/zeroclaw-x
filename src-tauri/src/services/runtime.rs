@@ -75,6 +75,8 @@ pub fn get_runtime_status(
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty()),
+        credential_mode: active_profile.settings.credential_mode,
+        auth_profile: active_profile.settings.auth_profile,
         workspace_dir: config.workspace_dir.display().to_string(),
         tool_dispatcher: config.agent.tool_dispatcher.clone(),
         autonomy_level: autonomy_level_record_from_config(&config.autonomy),
@@ -338,7 +340,8 @@ fn build_runtime_session_from_settings(
     db_path: &PathBuf,
     settings: RuntimeSettingsRecord,
 ) -> Result<RuntimeSession, String> {
-    let config = build_resolved_runtime_config(db_path, settings)?;
+    let normalized_settings = settings.normalized();
+    let config = build_resolved_runtime_config(db_path, normalized_settings.clone())?;
 
     let provider_name = config
         .default_provider
@@ -349,7 +352,15 @@ fn build_runtime_session_from_settings(
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4.6".to_string());
 
-    let options: ProviderRuntimeOptions = providers::provider_runtime_options_from_config(&config);
+    let mut options: ProviderRuntimeOptions =
+        providers::provider_runtime_options_from_config(&config);
+    if normalized_settings.credential_mode
+        == crate::models::settings::RuntimeCredentialModeRecord::AuthProfile
+        && supports_auth_profile_override(&provider_name)
+        && !normalized_settings.auth_profile.is_empty()
+    {
+        options.auth_profile_override = Some(normalized_settings.auth_profile.clone());
+    }
     let provider = providers::create_routed_provider_with_options(
         &provider_name,
         config.api_key.as_deref(),
@@ -429,6 +440,8 @@ fn build_runtime_config(
         model,
         provider_url,
         api_key,
+        credential_mode,
+        auth_profile: _,
         temperature,
         proxy,
         agent,
@@ -452,7 +465,9 @@ fn build_runtime_config(
         config.api_url = Some(provider_url);
     }
 
-    if !api_key.is_empty() {
+    if credential_mode == crate::models::settings::RuntimeCredentialModeRecord::ApiKey
+        && !api_key.is_empty()
+    {
         config.api_key = Some(api_key);
     }
 
@@ -468,11 +483,20 @@ fn build_runtime_config(
         config.default_model = Some(model);
     }
 
-    if let Some(api_key) = read_env("ZEROCLAW_API_KEY").or_else(|| read_env("API_KEY")) {
-        config.api_key = Some(api_key);
+    if credential_mode == crate::models::settings::RuntimeCredentialModeRecord::ApiKey {
+        if let Some(api_key) = read_env("ZEROCLAW_API_KEY").or_else(|| read_env("API_KEY")) {
+            config.api_key = Some(api_key);
+        }
     }
 
     Ok(config)
+}
+
+fn supports_auth_profile_override(provider: &str) -> bool {
+    matches!(
+        provider.trim().to_ascii_lowercase().as_str(),
+        "openai-codex" | "gemini"
+    )
 }
 
 fn default_runtime_root_from_db(db_path: &Path) -> Result<PathBuf, String> {

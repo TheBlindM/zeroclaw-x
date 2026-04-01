@@ -17,10 +17,7 @@ pub fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillRecord>, Strin
 }
 
 #[tauri::command]
-pub fn create_skill(
-    state: State<'_, AppState>,
-    skill: SkillDraft,
-) -> Result<SkillRecord, String> {
+pub fn create_skill(state: State<'_, AppState>, skill: SkillDraft) -> Result<SkillRecord, String> {
     services::skill::create_skill(state.inner(), &skill)
 }
 
