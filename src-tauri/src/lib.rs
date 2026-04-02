@@ -89,6 +89,7 @@ pub fn run() {
             commands::chat::rename_session,
             commands::chat::respond_to_tool_approval,
             commands::chat::send_message,
+            commands::chat::set_session_agent_mode,
             commands::chat::stop_message,
             commands::cron::create_cron_job,
             commands::cron::delete_cron_job,

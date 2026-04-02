@@ -24,8 +24,10 @@ pub async fn send_message(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| content.chars().take(48).collect::<String>());
     let db_path = state.db_path();
+    let run_agent_mode = agent_mode.unwrap_or(false);
 
     db::upsert_session(&db_path, &session_id, &title)?;
+    db::set_session_agent_mode(&db_path, &session_id, run_agent_mode)?;
     db::assign_session_project(&db_path, &session_id, project_id.as_deref())?;
     db::save_session_knowledge_scope(
         &db_path,
@@ -38,7 +40,6 @@ pub async fn send_message(
 
     let app_handle = app.clone();
     let state_clone = state.inner().clone();
-    let run_agent_mode = agent_mode.unwrap_or(false);
 
     tauri::async_runtime::spawn(async move {
         if let Err(error) = services::chat::stream_response(
@@ -92,6 +93,15 @@ pub fn rename_session(
     title: String,
 ) -> Result<(), String> {
     db::rename_session(&state.db_path(), &session_id, title.trim())
+}
+
+#[tauri::command]
+pub fn set_session_agent_mode(
+    state: State<'_, AppState>,
+    session_id: String,
+    agent_mode: bool,
+) -> Result<(), String> {
+    db::set_session_agent_mode(&state.db_path(), &session_id, agent_mode)
 }
 
 #[tauri::command]

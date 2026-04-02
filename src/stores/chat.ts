@@ -8,6 +8,7 @@ import {
   renameSession as renameSessionFromApi,
   respondToToolApproval,
   saveSessionKnowledgeScope,
+  setSessionAgentMode as setSessionAgentModeFromApi,
   type ChatApprovalDecision,
   type ChatApprovalRequestPayload,
   type ChatContextPayload,
@@ -180,6 +181,23 @@ export const useChatStore = defineStore("chat", {
     setAgentMode(sessionId: string, enabled: boolean) {
       this.agentModes[sessionId] = enabled;
     },
+    async saveAgentMode(sessionId: string, enabled: boolean) {
+      const previousValue = this.agentModes[sessionId] ?? false;
+      const session = this.findSession(sessionId);
+
+      this.agentModes[sessionId] = enabled;
+
+      try {
+        if (session?.source === "database") {
+          await setSessionAgentModeFromApi(sessionId, enabled);
+        }
+      } catch (error) {
+        this.agentModes[sessionId] = previousValue;
+        throw error;
+      }
+
+      return this.agentModes[sessionId];
+    },
     setKnowledgeScope(scope: SessionKnowledgeScopeRecord) {
       this.knowledgeScopes[scope.session_id] = scope;
     },
@@ -244,7 +262,7 @@ export const useChatStore = defineStore("chat", {
         this.contextPreviews = {};
         this.knowledgeScopes = {};
         this.pendingApprovals = {};
-        this.agentModes = {};
+        this.agentModes = Object.fromEntries(records.map((record) => [record.id, record.agent_mode]));
         this.loadedSessionIds = [];
         this.sortSessions();
 

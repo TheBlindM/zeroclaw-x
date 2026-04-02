@@ -39,6 +39,7 @@ export interface SessionRecord {
   message_count: number;
   last_message_preview: string | null;
   project_id: string | null;
+  agent_mode: boolean;
 }
 
 export interface MessageRecord {
@@ -337,6 +338,13 @@ export function renameSession(sessionId: string, title: string) {
   return invoke("rename_session", {
     sessionId,
     title
+  });
+}
+
+export function setSessionAgentMode(sessionId: string, agentMode: boolean) {
+  return invoke("set_session_agent_mode", {
+    sessionId,
+    agentMode
   });
 }
 

@@ -50,6 +50,7 @@ pub struct SessionRecord {
     pub message_count: i64,
     pub last_message_preview: Option<String>,
     pub project_id: Option<String>,
+    pub agent_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

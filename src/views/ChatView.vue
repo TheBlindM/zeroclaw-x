@@ -448,7 +448,10 @@ function handleToggleAgentMode() {
   }
 
   approvalFeedback.value = "";
-  chatStore.setAgentMode(activeSessionId.value, !activeAgentMode.value);
+  chatStore.saveAgentMode(activeSessionId.value, !activeAgentMode.value).catch((error) => {
+    console.error("Failed to update agent mode", error);
+    approvalFeedback.value = t("chat.feedback.approvalFailed");
+  });
 }
 
 async function handleRespondToApproval(requestId: string, decision: "yes" | "no" | "always") {

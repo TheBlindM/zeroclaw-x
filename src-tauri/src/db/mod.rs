@@ -73,6 +73,7 @@ fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
         message_count: row.get(4)?,
         last_message_preview: row.get(5)?,
         project_id: row.get(6)?,
+        agent_mode: row.get::<_, i64>(7)? != 0,
     })
 }
 
@@ -116,14 +117,41 @@ fn list_sessions_query(filter_sql: &str) -> String {
               ORDER BY CAST(latest.created_at AS INTEGER) DESC, latest.id DESC
               LIMIT 1
             ) AS last_message_preview,
-            ps.project_id AS project_id
+            ps.project_id AS project_id,
+            s.agent_mode AS agent_mode
          FROM sessions s
          LEFT JOIN messages m ON m.session_id = s.id
          LEFT JOIN project_sessions ps ON ps.session_id = s.id
          {filter_sql}
-         GROUP BY s.id, s.title, s.created_at, ps.project_id
+         GROUP BY s.id, s.title, s.created_at, ps.project_id, s.agent_mode
          ORDER BY updated_at DESC"
     )
+}
+
+fn ensure_sessions_agent_mode_column(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(sessions)")
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?;
+
+    let columns = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    if columns.iter().any(|column| column == "agent_mode") {
+        return Ok(());
+    }
+
+    connection
+        .execute(
+            "ALTER TABLE sessions ADD COLUMN agent_mode INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn clear_session_knowledge_scope(connection: &Connection, session_id: &str) -> Result<(), String> {
@@ -163,7 +191,8 @@ pub fn initialize(db_path: &Path) -> Result<(), String> {
     let connection = connect(db_path)?;
     connection
         .execute_batch(MIGRATION_SQL)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    ensure_sessions_agent_mode_column(&connection)
 }
 
 pub fn upsert_session(db_path: &Path, session_id: &str, title: &str) -> Result<(), String> {
@@ -189,6 +218,26 @@ pub fn rename_session(db_path: &Path, session_id: &str, title: &str) -> Result<(
         )
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+pub fn set_session_agent_mode(
+    db_path: &Path,
+    session_id: &str,
+    agent_mode: bool,
+) -> Result<(), String> {
+    let connection = connect(db_path)?;
+    let changed = connection
+        .execute(
+            "UPDATE sessions SET agent_mode = ?2 WHERE id = ?1",
+            params![session_id, if agent_mode { 1 } else { 0 }],
+        )
+        .map_err(|error| error.to_string())?;
+
+    if changed == 0 {
+        return Err("Session not found.".to_string());
+    }
+
+    Ok(())
 }
 
 pub fn delete_session(db_path: &Path, session_id: &str) -> Result<(), String> {
