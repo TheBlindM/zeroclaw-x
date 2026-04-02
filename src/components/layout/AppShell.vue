@@ -2,7 +2,6 @@
 import { onMounted } from "vue";
 import { RouterView } from "vue-router";
 import AppSidebar from "./AppSidebar.vue";
-import AppTopbar from "./AppTopbar.vue";
 import { useAppStore } from "@/stores/app";
 import { useUpdateStore } from "@/stores/update";
 
@@ -22,7 +21,6 @@ onMounted(() => {
   <div class="app-shell">
     <AppSidebar />
     <main class="content">
-      <AppTopbar />
       <section class="page-card">
         <RouterView />
       </section>

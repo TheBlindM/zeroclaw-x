@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
-import { computed, ref } from "vue";
+import { ArrowUp } from "lucide-vue-next";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import Button from "@/components/ui/Button.vue";
 
@@ -13,7 +14,18 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const draft = ref("");
+const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const canSubmit = computed(() => draft.value.trim().length > 0 && !props.busy);
+
+function resizeComposer() {
+  const element = textareaRef.value;
+  if (!element) {
+    return;
+  }
+
+  element.style.height = "auto";
+  element.style.height = `${Math.min(Math.max(element.scrollHeight, 132), 280)}px`;
+}
 
 function handleSubmit() {
   if (!canSubmit.value) {
@@ -29,19 +41,35 @@ function handleKeydown(event: KeyboardEvent) {
     handleSubmit();
   }
 }
+
+watch(draft, async () => {
+  await nextTick();
+  resizeComposer();
+});
+
+onMounted(() => {
+  resizeComposer();
+});
 </script>
 
 <template>
   <form class="composer" @submit.prevent="handleSubmit">
-    <textarea
-      v-model="draft"
-      class="textarea"
-      :placeholder="t('composer.placeholder')"
-      @keydown="handleKeydown"
-    />
-    <div class="composer__actions">
-      <span class="muted">{{ t("composer.hint") }}</span>
-      <Button :disabled="!canSubmit" type="submit">{{ t("composer.send") }}</Button>
+    <div class="composer__surface">
+      <textarea
+        ref="textareaRef"
+        v-model="draft"
+        class="textarea composer__input"
+        rows="1"
+        :placeholder="t('composer.placeholder')"
+        @keydown="handleKeydown"
+      />
+      <div class="composer__actions">
+        <span class="muted composer__hint">{{ t("composer.hint") }}</span>
+        <Button class="composer__submit" :disabled="!canSubmit" type="submit">
+          <ArrowUp :size="16" />
+          {{ t("composer.send") }}
+        </Button>
+      </div>
     </div>
   </form>
 </template>

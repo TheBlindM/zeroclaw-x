@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import { Bot, Sparkles, UserRound } from "lucide-vue-next";
 import { nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatMessage } from "@/stores/chat";
@@ -28,6 +29,18 @@ function resolveRole(role: ChatMessage["role"]) {
   return t(`chat.roles.${role}`);
 }
 
+function resolveIcon(role: ChatMessage["role"]) {
+  if (role === "user") {
+    return UserRound;
+  }
+
+  if (role === "system") {
+    return Sparkles;
+  }
+
+  return Bot;
+}
+
 function resolveContent(content: string) {
   return content === "ZeroClawX skeleton is ready. Ask for a project plan, code review, or build step."
     ? t("chat.defaults.welcome")
@@ -55,14 +68,20 @@ onMounted(() => {
       :key="message.id"
       class="message"
       :data-role="message.role"
+      :data-status="message.status ?? 'done'"
     >
-      <div class="message__meta">
-        <strong>{{ resolveRole(message.role) }}</strong>
-        <span>
-          {{ formatTimestamp(message.createdAt, { hour: "2-digit", minute: "2-digit" }) }}
-        </span>
+      <div class="message__avatar">
+        <component :is="resolveIcon(message.role)" :size="16" />
       </div>
-      <MarkdownMessage :content="resolveContent(message.content)" />
+      <div class="message__bubble">
+        <div class="message__meta">
+          <strong>{{ resolveRole(message.role) }}</strong>
+          <span>
+            {{ formatTimestamp(message.createdAt, { hour: "2-digit", minute: "2-digit" }) }}
+          </span>
+        </div>
+        <MarkdownMessage :content="resolveContent(message.content)" />
+      </div>
     </article>
   </div>
 </template>

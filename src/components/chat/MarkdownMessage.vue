@@ -27,5 +27,5 @@ const html = computed(() => markdown.render(props.content));
 </script>
 
 <template>
-  <div v-html="html"></div>
+  <div class="message-markdown" v-html="html"></div>
 </template>

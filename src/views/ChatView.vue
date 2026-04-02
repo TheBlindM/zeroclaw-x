@@ -472,7 +472,7 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
 <template>
   <div class="chat-layout">
     <aside class="chat-sessions panel">
-      <div class="row" style="justify-content: space-between;">
+      <div class="chat-sessions__header row">
         <strong>{{ t("chat.sessions") }}</strong>
         <Button variant="secondary" @click="chatStore.createSession()">{{ t("chat.new") }}</Button>
       </div>
@@ -491,16 +491,16 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
         </button>
       </label>
 
-      <div class="row" style="justify-content: space-between;">
+      <div class="chat-sessions__summary row">
         <span class="muted">{{ t("chat.shown", { count: filteredSessions.length }) }}</span>
         <span v-if="normalizedSearch" class="muted">{{ t("chat.filtered") }}</span>
       </div>
 
-      <div v-if="activeSession" class="panel" style="padding: 12px 14px;">
-        <div class="stack" style="gap: 10px;">
+      <div v-if="activeSession" class="panel chat-session-summary">
+        <div class="stack chat-session-summary__stack">
           <strong>{{ resolveSessionTitle(activeSession.title) }}</strong>
           <span class="muted">{{ resolveSessionPreview(activeSession.lastMessagePreview) }}</span>
-          <label class="settings-field" style="gap: 6px;">
+          <label class="settings-field chat-session-summary__field">
             <span class="muted">{{ t("chat.linkedProject") }}</span>
             <select class="field" :value="activeSession.projectId ?? ''" @change="handleAssignProject">
               <option value="">{{ t("chat.noProject") }}</option>
@@ -510,12 +510,14 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
               {{ activeSession.projectId ? t("chat.linkedProjectHintAssigned") : t("chat.linkedProjectHintEmpty") }}
             </span>
           </label>
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
-            <div class="stack" style="gap: 4px;">
+          <div class="row chat-session-summary__footer">
+            <div class="stack chat-session-summary__meta">
               <span class="muted">{{ t("chat.messagesCount", { count: activeSession.messageCount }) }}</span>
-              <span v-if="activeSession.projectId" class="session-project-chip">{{ resolveSessionProjectName(activeSession.projectId) }}</span>
+              <span v-if="activeSession.projectId" class="session-project-chip">
+                {{ resolveSessionProjectName(activeSession.projectId) }}
+              </span>
             </div>
-            <div class="row">
+            <div class="row chat-session-summary__actions">
               <Button variant="ghost" :disabled="isStreaming || isBootstrapping" @click="handleRenameSession()">
                 <Pencil :size="16" />
                 {{ t("chat.rename") }}
@@ -538,7 +540,10 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
           @click="handleSelectSession(session.id)"
         >
           <strong>
-            <template v-for="(segment, index) in highlightMatches(resolveSessionTitle(session.title))" :key="`${session.id}-title-${index}`">
+            <template
+              v-for="(segment, index) in highlightMatches(resolveSessionTitle(session.title))"
+              :key="`${session.id}-title-${index}`"
+            >
               <mark v-if="segment.match" class="highlight">{{ segment.text }}</mark>
               <template v-else>{{ segment.text }}</template>
             </template>
@@ -552,10 +557,10 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
               <template v-else>{{ segment.text }}</template>
             </template>
           </span>
-          <div v-if="session.projectId" class="row" style="justify-content: flex-start;">
+          <div v-if="session.projectId" class="row chat-sessions__project-row">
             <span class="session-project-chip">{{ resolveSessionProjectName(session.projectId) }}</span>
           </div>
-          <div class="row" style="justify-content: space-between; align-items: center;">
+          <div class="row chat-sessions__item-meta">
             <span class="muted">{{ t("chat.messagesCountShort", { count: session.messageCount }) }}</span>
             <span class="muted">
               {{ formatTimestamp(session.updatedAt, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}
@@ -571,186 +576,223 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
     </aside>
 
     <section class="chat-room panel">
-      <div class="panel runtime-panel">
-        <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px;">
-          <div class="stack" style="gap: 6px;">
-            <span class="eyebrow">{{ t("chat.runtimeEyebrow") }}</span>
-            <div class="row" style="align-items: center; gap: 10px; flex-wrap: wrap;">
-              <strong>{{ runtimeSummary }}</strong>
-              <span class="session-project-chip">{{ activeAgentMode ? t("chat.agentMode") : t("chat.chatMode") }}</span>
+      <div class="chat-room__shell">
+        <div class="chat-room__main">
+          <div class="chat-room__hero panel">
+            <div class="chat-room__hero-copy stack">
+              <span class="eyebrow">{{ t("routes.chat.title") }}</span>
+              <div class="chat-room__hero-heading">
+                <strong class="chat-room__hero-title">
+                  {{ activeSession ? resolveSessionTitle(activeSession.title) : t("chat.defaults.newSessionTitle") }}
+                </strong>
+                <span v-if="activeSession?.projectId" class="session-project-chip">
+                  {{ resolveSessionProjectName(activeSession.projectId) }}
+                </span>
+              </div>
+              <span class="muted chat-room__hero-preview">
+                {{ activeSession ? resolveSessionPreview(activeSession.lastMessagePreview) : t("chat.noMessagesDescription") }}
+              </span>
+              <div class="chat-room__hero-meta">
+                <span class="chat-room__hero-stat">{{ runtimeSummary }}</span>
+                <span class="chat-room__hero-stat">
+                  {{ t("chat.messagesCount", { count: activeSession?.messageCount ?? 0 }) }}
+                </span>
+                <span class="chat-room__hero-stat">{{ activeAgentMode ? t("chat.agentMode") : t("chat.chatMode") }}</span>
+              </div>
             </div>
-            <span class="muted">{{ runtimeMeta }}</span>
-            <span class="muted">{{ runtimePolicy }}</span>
-          </div>
-          <Button variant="secondary" @click="router.push('/settings')">
-            <Settings2 :size="16" />
-            {{ t("chat.runtimeSettings") }}
-          </Button>
-        </div>
-      </div>
-
-      <div class="panel agent-panel">
-        <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
-          <div class="stack" style="gap: 4px;">
-            <span class="eyebrow">{{ t("chat.agentEyebrow") }}</span>
-            <strong>{{ t("chat.agentTitle") }}</strong>
-            <span class="muted">
-              {{ activeAgentMode ? t("chat.agentEnabledDescription") : t("chat.agentDisabledDescription") }}
-            </span>
-          </div>
-          <Button :variant="activeAgentMode ? 'primary' : 'secondary'" :disabled="isStreaming || !activeSessionId" @click="handleToggleAgentMode()">
-            <Bot :size="16" />
-            {{ activeAgentMode ? t("chat.agentEnabled") : t("chat.enableAgent") }}
-          </Button>
-        </div>
-      </div>
-
-      <div v-if="activePendingApprovals.length > 0" class="panel approval-panel">
-        <div class="stack" style="gap: 12px;">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
-            <div class="stack" style="gap: 4px;">
-              <span class="eyebrow">{{ t("chat.approvalEyebrow") }}</span>
-              <strong>{{ t("chat.pendingCalls", { count: activePendingApprovals.length }) }}</strong>
-              <span class="muted">{{ t("chat.approvalDescription") }}</span>
+            <div class="chat-room__hero-actions">
+              <Button variant="secondary" @click="router.push('/settings')">
+                <Settings2 :size="16" />
+                {{ t("chat.runtimeSettings") }}
+              </Button>
             </div>
-            <span class="session-project-chip">{{ t("chat.waitingForYou") }}</span>
           </div>
-          <span v-if="approvalFeedback" class="muted">{{ approvalFeedback }}</span>
-          <div class="approval-list">
-            <article v-for="approval in activePendingApprovals" :key="approval.request_id" class="approval-card">
-              <div class="stack" style="gap: 6px;">
-                <div class="row" style="justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
-                  <strong>{{ approval.tool_name }}</strong>
-                  <span class="approval-chip">
-                    <ShieldCheck :size="14" />
-                    {{ t("chat.approvalRequired") }}
+
+          <div class="chat-room__stream panel">
+            <div class="chat-room__stream-toolbar row">
+              <span class="muted chat-room__stream-note">
+                {{ activeSession?.projectId ? t("chat.linkedProjectHintAssigned") : t("chat.linkedProjectHintEmpty") }}
+              </span>
+              <Button v-if="isStreaming" variant="ghost" @click="handleStop()">{{ t("chat.stopStream") }}</Button>
+            </div>
+
+            <EmptyState
+              v-if="isBootstrapping"
+              :title="t('chat.loadingHistoryTitle')"
+              :description="t('chat.loadingHistoryDescription')"
+            />
+            <ChatMessageList v-else-if="activeMessages.length > 0" :messages="activeMessages" />
+            <EmptyState
+              v-else
+              :title="t('chat.noMessagesTitle')"
+              :description="t('chat.noMessagesDescription')"
+            />
+          </div>
+
+          <div class="chat-room__composer panel">
+            <ChatComposer :busy="isStreaming || isBootstrapping" @submit="handleSubmit" />
+          </div>
+        </div>
+
+        <aside class="chat-room__rail">
+          <div class="panel chat-sidebar-summary">
+            <div class="stack chat-panel__stack">
+              <div class="chat-panel__header row">
+                <div class="stack chat-panel__copy">
+                  <span class="eyebrow">{{ t("chat.runtimeEyebrow") }}</span>
+                  <strong>{{ runtimeSummary }}</strong>
+                </div>
+                <span class="session-project-chip">{{ activeAgentMode ? t("chat.agentMode") : t("chat.chatMode") }}</span>
+              </div>
+              <span class="muted chat-sidebar-summary__text">{{ runtimeMeta }}</span>
+              <span class="muted chat-sidebar-summary__text">{{ runtimePolicy }}</span>
+              <div class="chat-sidebar-summary__agent row">
+                <div class="stack chat-panel__copy">
+                  <span class="eyebrow">{{ t("chat.agentEyebrow") }}</span>
+                  <span class="muted">
+                    {{ activeAgentMode ? t("chat.agentEnabledDescription") : t("chat.agentDisabledDescription") }}
                   </span>
                 </div>
-                <p class="approval-card__summary">{{ approval.arguments_summary }}</p>
-              </div>
-              <div class="row approval-actions">
-                <Button variant="ghost" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'no')">{{ t("chat.deny") }}</Button>
-                <Button variant="secondary" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'yes')">{{ t("chat.approveOnce") }}</Button>
-                <Button :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'always')">{{ t("chat.alwaysAllow") }}</Button>
-              </div>
-            </article>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="activeSession?.projectId" class="panel knowledge-scope-panel">
-        <div class="stack" style="gap: 12px;">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
-            <div class="stack" style="gap: 4px;">
-              <span class="eyebrow">{{ t("chat.knowledgeEyebrow") }}</span>
-              <strong>{{ resolveSessionProjectName(activeSession.projectId) }}</strong>
-              <span class="muted">{{ t("chat.knowledgeDescription") }}</span>
-            </div>
-            <div class="row knowledge-scope-actions">
-              <Button
-                :variant="activeKnowledgeScope?.mode === 'auto' ? 'primary' : 'secondary'"
-                :disabled="isStreaming"
-                @click="handleSetKnowledgeMode('auto')"
-              >
-                {{ t("chat.auto") }}
-              </Button>
-              <Button
-                :variant="activeKnowledgeScope?.mode === 'manual' ? 'primary' : 'secondary'"
-                :disabled="isStreaming"
-                @click="handleSetKnowledgeMode('manual')"
-              >
-                {{ t("chat.manual") }}
-              </Button>
-            </div>
-          </div>
-
-          <span v-if="knowledgeScopeFeedback" class="muted">{{ knowledgeScopeFeedback }}</span>
-
-          <div v-if="isLoadingKnowledgeScope" class="settings-inline-note">
-            {{ t("chat.knowledgeLoading") }}
-          </div>
-
-          <div v-else-if="projectKnowledgeDocuments.length === 0" class="settings-inline-note">
-            {{ t("chat.knowledgeEmpty") }}
-          </div>
-
-          <template v-else-if="activeKnowledgeScope?.mode === 'manual'">
-            <div class="row knowledge-scope-actions" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap;">
-              <span class="muted">{{ t("chat.knowledgeManualHint") }}</span>
-              <div class="row">
-                <Button variant="ghost" :disabled="isStreaming" @click="handleSelectAllKnowledge">{{ t("chat.selectAll") }}</Button>
-                <Button variant="ghost" :disabled="isStreaming" @click="handleClearKnowledgeSelection">{{ t("chat.clear") }}</Button>
+                <Button :variant="activeAgentMode ? 'primary' : 'secondary'" :disabled="isStreaming || !activeSessionId" @click="handleToggleAgentMode()">
+                  <Bot :size="16" />
+                  {{ activeAgentMode ? t("chat.agentEnabled") : t("chat.enableAgent") }}
+                </Button>
               </div>
             </div>
+          </div>
 
-            <div class="knowledge-scope-list">
-              <label
-                v-for="document in projectKnowledgeDocuments"
-                :key="document.id"
-                class="scope-document-card"
-                :data-active="selectedScopedDocumentIds.has(document.id)"
-              >
-                <input
-                  class="scope-document-card__checkbox"
-                  type="checkbox"
-                  :checked="selectedScopedDocumentIds.has(document.id)"
-                  :disabled="isStreaming"
-                  @change="handleToggleKnowledgeDocument(document.id)"
-                />
-                <div class="stack" style="gap: 6px; min-width: 0;">
-                  <strong>{{ document.title }}</strong>
-                  <span class="muted knowledge-card__source">{{ document.source_path }}</span>
-                  <p class="knowledge-card__preview">{{ document.content_preview }}</p>
+          <div v-if="activePendingApprovals.length > 0" class="panel approval-panel">
+            <div class="stack chat-panel__stack">
+              <div class="chat-panel__header row">
+                <div class="stack chat-panel__copy">
+                  <span class="eyebrow">{{ t("chat.approvalEyebrow") }}</span>
+                  <strong>{{ t("chat.pendingCalls", { count: activePendingApprovals.length }) }}</strong>
+                  <span class="muted">{{ t("chat.approvalDescription") }}</span>
                 </div>
-              </label>
+                <span class="session-project-chip">{{ t("chat.waitingForYou") }}</span>
+              </div>
+              <span v-if="approvalFeedback" class="muted">{{ approvalFeedback }}</span>
+              <div class="approval-list">
+                <article v-for="approval in activePendingApprovals" :key="approval.request_id" class="approval-card">
+                  <div class="stack chat-panel__card-stack">
+                    <div class="row chat-panel__card-header">
+                      <strong>{{ approval.tool_name }}</strong>
+                      <span class="approval-chip">
+                        <ShieldCheck :size="14" />
+                        {{ t("chat.approvalRequired") }}
+                      </span>
+                    </div>
+                    <p class="approval-card__summary">{{ approval.arguments_summary }}</p>
+                  </div>
+                  <div class="row approval-actions">
+                    <Button variant="ghost" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'no')">{{ t("chat.deny") }}</Button>
+                    <Button variant="secondary" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'yes')">{{ t("chat.approveOnce") }}</Button>
+                    <Button :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'always')">{{ t("chat.alwaysAllow") }}</Button>
+                  </div>
+                </article>
+              </div>
             </div>
-          </template>
-
-          <div v-else class="settings-inline-note">
-            {{ t("chat.knowledgeAutoHint") }}
           </div>
-        </div>
-      </div>
 
-      <div v-if="activeContextPreview" class="panel context-preview-panel">
-        <div class="stack" style="gap: 8px;">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
-            <div class="stack" style="gap: 4px;">
-              <span class="eyebrow">{{ t("chat.contextEyebrow") }}</span>
-              <strong>{{ activeContextPreview.project_name }}</strong>
-              <span class="muted">{{ resolveContextDescription() }}</span>
+          <div v-if="activeSession?.projectId" class="panel knowledge-scope-panel">
+            <div class="stack chat-panel__stack">
+              <div class="chat-panel__header row">
+                <div class="stack chat-panel__copy">
+                  <span class="eyebrow">{{ t("chat.knowledgeEyebrow") }}</span>
+                  <strong>{{ resolveSessionProjectName(activeSession.projectId) }}</strong>
+                  <span class="muted">{{ t("chat.knowledgeDescription") }}</span>
+                </div>
+                <div class="row knowledge-scope-actions">
+                  <Button
+                    :variant="activeKnowledgeScope?.mode === 'auto' ? 'primary' : 'secondary'"
+                    :disabled="isStreaming"
+                    @click="handleSetKnowledgeMode('auto')"
+                  >
+                    {{ t("chat.auto") }}
+                  </Button>
+                  <Button
+                    :variant="activeKnowledgeScope?.mode === 'manual' ? 'primary' : 'secondary'"
+                    :disabled="isStreaming"
+                    @click="handleSetKnowledgeMode('manual')"
+                  >
+                    {{ t("chat.manual") }}
+                  </Button>
+                </div>
+              </div>
+
+              <span v-if="knowledgeScopeFeedback" class="muted">{{ knowledgeScopeFeedback }}</span>
+
+              <div v-if="isLoadingKnowledgeScope" class="settings-inline-note">
+                {{ t("chat.knowledgeLoading") }}
+              </div>
+
+              <div v-else-if="projectKnowledgeDocuments.length === 0" class="settings-inline-note">
+                {{ t("chat.knowledgeEmpty") }}
+              </div>
+
+              <template v-else-if="activeKnowledgeScope?.mode === 'manual'">
+                <div class="row knowledge-scope-actions knowledge-scope-actions--between">
+                  <span class="muted">{{ t("chat.knowledgeManualHint") }}</span>
+                  <div class="row">
+                    <Button variant="ghost" :disabled="isStreaming" @click="handleSelectAllKnowledge">{{ t("chat.selectAll") }}</Button>
+                    <Button variant="ghost" :disabled="isStreaming" @click="handleClearKnowledgeSelection">{{ t("chat.clear") }}</Button>
+                  </div>
+                </div>
+
+                <div class="knowledge-scope-list">
+                  <label
+                    v-for="document in projectKnowledgeDocuments"
+                    :key="document.id"
+                    class="scope-document-card"
+                    :data-active="selectedScopedDocumentIds.has(document.id)"
+                  >
+                    <input
+                      class="scope-document-card__checkbox"
+                      type="checkbox"
+                      :checked="selectedScopedDocumentIds.has(document.id)"
+                      :disabled="isStreaming"
+                      @change="handleToggleKnowledgeDocument(document.id)"
+                    />
+                    <div class="stack scope-document-card__stack">
+                      <strong>{{ document.title }}</strong>
+                      <span class="muted knowledge-card__source">{{ document.source_path }}</span>
+                      <p class="knowledge-card__preview">{{ document.content_preview }}</p>
+                    </div>
+                  </label>
+                </div>
+              </template>
+
+              <div v-else class="settings-inline-note">
+                {{ t("chat.knowledgeAutoHint") }}
+              </div>
             </div>
-            <span class="session-project-chip">{{ activeContextPreview.scope_mode === 'manual' ? t("chat.contextManualBadge") : t("chat.contextAutoBadge") }}</span>
           </div>
-          <div v-if="activeContextPreview.knowledge_titles.length > 0" class="context-preview-chips">
-            <span
-              v-for="title in activeContextPreview.knowledge_titles"
-              :key="title"
-              class="context-preview-chip"
-            >
-              {{ title }}
-            </span>
+
+          <div v-if="activeContextPreview" class="panel context-preview-panel">
+            <div class="stack chat-panel__stack chat-panel__stack--tight">
+              <div class="chat-panel__header row">
+                <div class="stack chat-panel__copy">
+                  <span class="eyebrow">{{ t("chat.contextEyebrow") }}</span>
+                  <strong>{{ activeContextPreview.project_name }}</strong>
+                  <span class="muted">{{ resolveContextDescription() }}</span>
+                </div>
+                <span class="session-project-chip">
+                  {{ activeContextPreview.scope_mode === 'manual' ? t("chat.contextManualBadge") : t("chat.contextAutoBadge") }}
+                </span>
+              </div>
+              <div v-if="activeContextPreview.knowledge_titles.length > 0" class="context-preview-chips">
+                <span
+                  v-for="title in activeContextPreview.knowledge_titles"
+                  :key="title"
+                  class="context-preview-chip"
+                >
+                  {{ title }}
+                </span>
+              </div>
+            </div>
           </div>
-        </div>
+        </aside>
       </div>
-
-      <EmptyState
-        v-if="isBootstrapping"
-        :title="t('chat.loadingHistoryTitle')"
-        :description="t('chat.loadingHistoryDescription')"
-      />
-      <ChatMessageList v-else-if="activeMessages.length > 0" :messages="activeMessages" />
-      <EmptyState
-        v-else
-        :title="t('chat.noMessagesTitle')"
-        :description="t('chat.noMessagesDescription')"
-      />
-
-      <div class="row" style="justify-content: flex-end;">
-        <Button v-if="isStreaming" variant="ghost" @click="handleStop()">{{ t("chat.stopStream") }}</Button>
-      </div>
-      <ChatComposer :busy="isStreaming || isBootstrapping" @submit="handleSubmit" />
     </section>
   </div>
 </template>
-

@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { Bot, Clock3, FolderKanban, PlugZap, Radio, Settings2, Sparkles } from "lucide-vue-next";
+import Button from "@/components/ui/Button.vue";
+import { useAppStore } from "@/stores/app";
 import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute } from "vue-router";
 
+const appStore = useAppStore();
 const { t } = useI18n();
 const route = useRoute();
 
@@ -87,9 +90,19 @@ const navItems = [
     </nav>
 
     <div class="sidebar__footer" style="margin-top: auto; padding: 14px 16px;">
-      <div class="stack" style="gap: 6px;">
-        <strong>{{ t("sidebar.runtimeStatus") }}</strong>
-        <span class="muted">{{ t("sidebar.runtimeSummary") }}</span>
+      <div class="stack sidebar__footer-stack">
+        <div class="stack sidebar__footer-copy">
+          <strong>{{ t("sidebar.runtimeStatus") }}</strong>
+          <span class="muted">{{ t("sidebar.runtimeSummary") }}</span>
+        </div>
+        <div class="sidebar__preferences">
+          <Button variant="secondary" class="sidebar__preferences-button" @click="appStore.setLocale(appStore.locale === 'zh' ? 'en' : 'zh')">
+            {{ appStore.locale === "zh" ? "EN" : "中文" }}
+          </Button>
+          <Button variant="secondary" class="sidebar__preferences-button" @click="appStore.toggleTheme()">
+            {{ appStore.theme === "dark" ? t("topbar.light") : t("topbar.dark") }}
+          </Button>
+        </div>
       </div>
     </div>
   </aside>
