@@ -12,18 +12,28 @@ import {
   type AuthLoginStatusRecord,
   type AuthProfileRecord,
   type RuntimeCredentialModeRecord,
+  type RuntimeProviderEntryRecord,
+  type RuntimeProviderGroupRecord,
+  type RuntimeProxySettingsRecord,
   type RuntimeSettingsRecord,
   type UpdateSettingsRecord
 } from "@/api/tauri";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
 import { useAppStore } from "@/stores/app";
-import { defaultRuntimeSettings, useSettingsStore } from "@/stores/settings";
+import {
+  defaultProxySettings,
+  defaultRuntimeProviderEntry,
+  defaultRuntimeProviderGroup,
+  defaultRuntimeSettings,
+  useSettingsStore
+} from "@/stores/settings";
 import { defaultUpdateSettings, useUpdateStore } from "@/stores/update";
 
 interface RuntimePreset {
   id: string;
   labelKey: string;
+  groupName: string;
   provider: string;
   model: string;
   providerUrl: string;
@@ -42,7 +52,7 @@ interface ProviderSuggestion {
   noteKey: string;
 }
 
-type SettingsTabKey = "general" | "runtime" | "agent" | "updates";
+type SettingsTabKey = "general" | "runtime" | "proxy" | "agent" | "updates";
 
 interface SettingsTabDefinition {
   id: SettingsTabKey;
@@ -54,6 +64,7 @@ const runtimePresets: RuntimePreset[] = [
   {
     id: "openrouter",
     labelKey: "settings.presetLabels.openrouter",
+    groupName: "General",
     provider: "openrouter",
     model: "anthropic/claude-sonnet-4.6",
     providerUrl: "",
@@ -64,6 +75,7 @@ const runtimePresets: RuntimePreset[] = [
   {
     id: "openai",
     labelKey: "settings.presetLabels.openai",
+    groupName: "OpenAI",
     provider: "openai",
     model: "gpt-4o-mini",
     providerUrl: "",
@@ -74,6 +86,7 @@ const runtimePresets: RuntimePreset[] = [
   {
     id: "openai-codex",
     labelKey: "settings.presetLabels.openaiCodex",
+    groupName: "Codex",
     provider: "openai-codex",
     model: "gpt-5.4",
     providerUrl: "",
@@ -84,6 +97,7 @@ const runtimePresets: RuntimePreset[] = [
   {
     id: "gemini",
     labelKey: "settings.presetLabels.gemini",
+    groupName: "Gemini",
     provider: "gemini",
     model: "gemini-2.5-pro",
     providerUrl: "",
@@ -94,6 +108,7 @@ const runtimePresets: RuntimePreset[] = [
   {
     id: "anthropic",
     labelKey: "settings.presetLabels.anthropic",
+    groupName: "Claude",
     provider: "anthropic",
     model: "claude-sonnet-4-5",
     providerUrl: "",
@@ -104,6 +119,7 @@ const runtimePresets: RuntimePreset[] = [
   {
     id: "ollama",
     labelKey: "settings.presetLabels.ollama",
+    groupName: "Local",
     provider: "ollama",
     model: "qwen2.5-coder:7b",
     providerUrl: "http://127.0.0.1:11434",
@@ -114,6 +130,7 @@ const runtimePresets: RuntimePreset[] = [
   {
     id: "custom-endpoint",
     labelKey: "settings.presetLabels.custom",
+    groupName: "Custom",
     provider: "custom:https://your-endpoint.example/v1",
     model: "gpt-4o-mini",
     providerUrl: "https://your-endpoint.example/v1",
@@ -143,6 +160,11 @@ const settingsTabs: SettingsTabDefinition[] = [
     id: "runtime",
     labelKey: "settings.tabs.runtime.label",
     descriptionKey: "settings.tabs.runtime.description"
+  },
+  {
+    id: "proxy",
+    labelKey: "settings.tabs.proxy.label",
+    descriptionKey: "settings.tabs.proxy.description"
   },
   {
     id: "agent",
@@ -184,10 +206,9 @@ const appStore = useAppStore();
 const settingsStore = useSettingsStore();
 const updateStore = useUpdateStore();
 const { t } = useI18n();
-const { activeProfile, profiles } = storeToRefs(settingsStore);
+const { activeProfile, profiles, proxySettings, proxySupport } = storeToRefs(settingsStore);
 const activeSettingsTab = ref<SettingsTabKey>("general");
 const showApiKey = ref(false);
-const showProxySettings = ref(false);
 const showAutonomyAdvanced = ref(false);
 const saveMessage = ref("");
 const testMessage = ref("");
@@ -197,11 +218,53 @@ const authProfilesLoading = ref(false);
 const authLoginChallenge = ref<AuthLoginChallengeRecord | null>(null);
 const authLoginStatus = ref<AuthLoginStatusRecord | null>(null);
 const authPollingHandle = ref<number | null>(null);
+const selectedRuntimeGroupId = ref("");
+const selectedRuntimeEntryId = ref("");
+const runtimeEditorMode = ref<"closed" | "create" | "edit">("closed");
+const createGroupName = ref("");
+const createEntryDraft = reactive(defaultRuntimeProviderEntry());
+const drawerRuntimeGroupId = ref("");
+const drawerRuntimeEntryId = ref("");
 
 const form = reactive(defaultRuntimeSettings());
+const proxyForm = reactive(defaultProxySettings());
 const updateForm = reactive(defaultUpdateSettings());
 
-const currentProviderKey = computed(() => resolveProviderKey(form.provider));
+const activeRuntimeGroup = computed(
+  () =>
+    form.groups.find((group) => group.id === form.active_group_id) ??
+    form.groups[0] ??
+    null
+);
+const selectedRuntimeGroup = computed(
+  () =>
+    form.groups.find((group) => group.id === selectedRuntimeGroupId.value) ??
+    activeRuntimeGroup.value ??
+    null
+);
+const activeRuntimeEntry = computed(
+  () =>
+    activeRuntimeGroup.value?.entries.find((entry) => entry.id === activeRuntimeGroup.value?.active_entry_id) ??
+    activeRuntimeGroup.value?.entries[0] ??
+    null
+);
+const selectedRuntimeEntry = computed(
+  () =>
+    selectedRuntimeGroup.value?.entries.find((entry) => entry.id === selectedRuntimeEntryId.value) ??
+    selectedRuntimeGroup.value?.entries[0] ??
+    (selectedRuntimeGroup.value?.id === activeRuntimeGroup.value?.id ? activeRuntimeEntry.value : null)
+);
+const isRuntimeDrawerOpen = computed(() => runtimeEditorMode.value !== "closed");
+const isCreateDrawer = computed(() => runtimeEditorMode.value === "create");
+const isEditDrawer = computed(() => runtimeEditorMode.value === "edit");
+const drawerRuntimeGroup = computed(
+  () =>
+    form.groups.find((group) => group.id === drawerRuntimeGroupId.value) ??
+    activeRuntimeGroup.value ??
+    null
+);
+const currentEditableRuntimeEntry = computed(() => (isRuntimeDrawerOpen.value ? createEntryDraft : null));
+const currentProviderKey = computed(() => resolveProviderKey(currentEditableRuntimeEntry.value?.provider ?? ""));
 const currentProviderSupportsAuth = computed(() => currentProviderKey.value === "openai-codex" || currentProviderKey.value === "gemini");
 const currentProviderRequiresAuthProfile = computed(() => currentProviderKey.value === "openai-codex");
 const currentProviderSupportsApiKey = computed(() => currentProviderKey.value !== "openai-codex");
@@ -214,9 +277,10 @@ const effectiveCredentialMode = computed<RuntimeCredentialModeRecord>(() => {
     return "api_key";
   }
 
-  return form.credential_mode;
+  return currentEditableRuntimeEntry.value?.credential_mode ?? "api_key";
 });
 const showAuthSettings = computed(() => currentProviderSupportsAuth.value && effectiveCredentialMode.value === "auth_profile");
+const runtimeGroups = computed(() => form.groups);
 const selectedTheme = computed({
   get: () => appStore.theme,
   set: (value) => {
@@ -234,15 +298,15 @@ const selectedLocale = computed({
   }
 });
 const proxyNoProxyText = computed({
-  get: () => form.proxy.no_proxy.join(", "),
+  get: () => proxyForm.no_proxy.join(", "),
   set: (value: string) => {
-    form.proxy.no_proxy = splitCommaSeparated(value);
+    proxyForm.no_proxy = splitCommaSeparated(value);
   }
 });
 const proxyServicesText = computed({
-  get: () => form.proxy.services.join(", "),
+  get: () => proxyForm.services.join(", "),
   set: (value: string) => {
-    form.proxy.services = splitCommaSeparated(value);
+    proxyForm.services = splitCommaSeparated(value);
   }
 });
 const autonomyAllowedCommandsText = computed({
@@ -282,7 +346,7 @@ const updateEndpointsText = computed({
   }
 });
 const visibleProviderSuggestions = computed(() => {
-  const query = form.provider.trim().toLowerCase();
+  const query = currentEditableRuntimeEntry.value?.provider.trim().toLowerCase() ?? "";
   if (!query) {
     return providerSuggestions.slice(0, 5);
   }
@@ -296,7 +360,7 @@ const visibleProviderSuggestions = computed(() => {
 });
 const visibleModelSuggestions = computed(() => {
   const providerKey = currentProviderKey.value;
-  const query = form.model.trim().toLowerCase();
+  const query = currentEditableRuntimeEntry.value?.model.trim().toLowerCase() ?? "";
   const suggestions = modelSuggestionsByProvider[providerKey] ?? [];
 
   if (!query) {
@@ -318,7 +382,7 @@ const providerContextHint = computed(() => {
   }
 });
 const proxyScopeHint = computed(() => {
-  switch (form.proxy.scope) {
+  switch (proxyForm.scope) {
     case "environment":
       return t("settings.proxyScopeHints.environment");
     case "services":
@@ -328,20 +392,20 @@ const proxyScopeHint = computed(() => {
   }
 });
 const proxySummary = computed(() => {
-  if (!form.proxy.enabled) {
+  if (!proxyForm.enabled) {
     return t("settings.proxyStatusDisabled");
   }
 
-  const configuredTargets = [form.proxy.http_proxy, form.proxy.https_proxy, form.proxy.all_proxy].filter(
+  const configuredTargets = [proxyForm.http_proxy, proxyForm.https_proxy, proxyForm.all_proxy].filter(
     (value) => value.trim().length > 0
   ).length;
-  const scopeLabel = t(`settings.proxyScopes.${form.proxy.scope}`);
+  const scopeLabel = t(`settings.proxyScopes.${proxyForm.scope}`);
 
-  if (form.proxy.scope === "services") {
+  if (proxyForm.scope === "services") {
     return t("settings.proxyStatusServices", {
       scope: scopeLabel,
       targets: configuredTargets,
-      count: form.proxy.services.length
+      count: proxyForm.services.length
     });
   }
 
@@ -350,6 +414,8 @@ const proxySummary = computed(() => {
     targets: configuredTargets
   });
 });
+const supportedProxySelectors = computed(() => proxySupport.value.supported_selectors ?? []);
+const supportedProxyServiceKeys = computed(() => proxySupport.value.supported_service_keys ?? []);
 const workspaceSummary = computed(() => form.agent.workspace_dir.trim() || settingsStore.status.workspace_dir || t("settings.workspaceDirectoryDefault"));
 const toolDispatcherHint = computed(() => {
   switch (form.agent.tool_dispatcher) {
@@ -393,10 +459,155 @@ const activeSettingsTabMeta = computed(
   () => settingsTabs.find((tab) => tab.id === activeSettingsTab.value) ?? settingsTabs[0]
 );
 
+function resolveRuntimeEntryName(entry: Pick<RuntimeProviderEntryRecord, "name" | "provider" | "model"> | null | undefined) {
+  if (!entry) {
+    return t("settings.entryNames.current");
+  }
+
+  const trimmed = entry.name.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+
+  if (entry.provider.trim() && entry.model.trim()) {
+    return `${entry.provider} · ${entry.model}`;
+  }
+
+  if (entry.provider.trim()) {
+    return entry.provider.trim();
+  }
+
+  return t("settings.entryNames.current");
+}
+
+function resolveRuntimeGroupName(group: Pick<RuntimeProviderGroupRecord, "name"> | null | undefined) {
+  const value = group?.name.trim();
+  return value || t("settings.groupNames.current");
+}
+
+function slugifyEntryName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function createRuntimeGroupId(baseName: string) {
+  const base = slugifyEntryName(baseName) || `group-${form.groups.length + 1}`;
+  let candidate = base;
+  let suffix = 2;
+
+  while (form.groups.some((group) => group.id === candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+
+  return candidate;
+}
+
+function createRuntimeEntryId(baseName: string, group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value) {
+  const existingEntries = group?.entries ?? [];
+  const base = slugifyEntryName(baseName) || `entry-${existingEntries.length + 1}`;
+  let candidate = base;
+  let suffix = 2;
+
+  while (existingEntries.some((entry) => entry.id === candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+
+  return candidate;
+}
+
+function createRuntimeEntryName(
+  baseName: string,
+  group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value
+) {
+  const existingEntries = group?.entries ?? [];
+  const base = baseName.trim() || t("settings.entryNames.generated", { count: existingEntries.length + 1 });
+  let candidate = base;
+  let suffix = 2;
+
+  while (existingEntries.some((entry) => entry.name === candidate)) {
+    candidate = `${base} ${suffix}`;
+    suffix += 1;
+  }
+
+  return candidate;
+}
+
+function createRuntimeGroup(name: string, overrides: Partial<RuntimeProviderGroupRecord> = {}) {
+  const normalizedName = name.trim() || t("settings.groupNames.generated", { count: form.groups.length + 1 });
+  return defaultRuntimeProviderGroup({
+    ...overrides,
+    id: createRuntimeGroupId(overrides.id ?? normalizedName),
+    name: normalizedName,
+    active_entry_id: overrides.active_entry_id ?? defaultRuntimeProviderEntry().id,
+    entries: overrides.entries ?? [defaultRuntimeProviderEntry()]
+  });
+}
+
+function createRuntimeEntry(
+  overrides: Partial<RuntimeProviderEntryRecord> = {},
+  group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value
+) {
+  const draft = defaultRuntimeProviderEntry({
+    ...overrides
+  });
+  const name = createRuntimeEntryName(overrides.name ?? resolveRuntimeEntryName(draft), group);
+
+  return defaultRuntimeProviderEntry({
+    ...draft,
+    ...overrides,
+    name,
+    id: createRuntimeEntryId(overrides.id ?? name, group)
+  });
+}
+
+function ensureSelectedRuntimeEntry() {
+  const currentGroup = selectedRuntimeGroup.value;
+  const fallbackId = currentGroup?.active_entry_id || currentGroup?.entries[0]?.id || "";
+
+  if (!selectedRuntimeEntryId.value || !currentGroup?.entries.some((entry) => entry.id === selectedRuntimeEntryId.value)) {
+    selectedRuntimeEntryId.value = fallbackId;
+  }
+}
+
+function resetCreateDraft() {
+  const baseGroup = selectedRuntimeGroup.value;
+  const baseEntry = selectedRuntimeEntry.value ?? activeRuntimeEntry.value;
+  createGroupName.value = baseGroup ? resolveRuntimeGroupName(baseGroup) : "";
+  drawerRuntimeGroupId.value = baseGroup?.id ?? "";
+  drawerRuntimeEntryId.value = "";
+  Object.assign(
+    createEntryDraft,
+    defaultRuntimeProviderEntry({
+      name: "",
+      provider: baseEntry?.provider ?? "",
+      model: baseEntry?.model ?? "",
+      provider_url: baseEntry?.provider_url ?? "",
+      api_key: "",
+      credential_mode: baseEntry?.credential_mode ?? "api_key",
+      auth_profile: "",
+      temperature: baseEntry?.temperature ?? defaultRuntimeProviderEntry().temperature
+    })
+  );
+}
+
 watch(
   () => settingsStore.runtime,
   (runtime) => {
     applyForm(runtime);
+    runtimeEditorMode.value = "closed";
+  },
+  { deep: true, immediate: true }
+);
+
+watch(
+  () => proxySettings.value,
+  (settings) => {
+    applyProxyForm(settings);
   },
   { deep: true, immediate: true }
 );
@@ -407,16 +618,6 @@ watch(
     applyUpdateForm(settings);
   },
   { deep: true, immediate: true }
-);
-
-watch(
-  () => form.proxy.enabled,
-  (enabled) => {
-    if (enabled) {
-      showProxySettings.value = true;
-    }
-  },
-  { immediate: true }
 );
 
 watch(
@@ -435,12 +636,29 @@ watch(
 );
 
 watch(
+  () => [
+    selectedRuntimeGroupId.value,
+    form.active_group_id,
+    ...form.groups.map((group) => `${group.id}:${group.active_entry_id}:${group.entries.map((entry) => entry.id).join(",")}`)
+  ],
+  () => {
+    ensureSelectedRuntimeEntry();
+  },
+  { immediate: true }
+);
+
+watch(
   [currentProviderKey, effectiveCredentialMode],
   async ([providerKey, credentialMode]) => {
+    const targetEntry = isRuntimeDrawerOpen.value ? createEntryDraft : null;
+    if (!targetEntry) {
+      return;
+    }
+
     if (providerKey === "openai-codex") {
-      form.credential_mode = "auth_profile";
+      targetEntry.credential_mode = "auth_profile";
     } else if (providerKey !== "gemini") {
-      form.credential_mode = "api_key";
+      targetEntry.credential_mode = "api_key";
     }
 
     if (providerKey !== "openai-codex" && providerKey !== "gemini") {
@@ -465,7 +683,7 @@ watch(
 );
 
 onMounted(async () => {
-  if (!settingsStore.loaded) {
+  if (!settingsStore.loaded || !settingsStore.proxyLoaded) {
     try {
       await settingsStore.bootstrap();
     } catch {
@@ -515,15 +733,72 @@ async function handleSave() {
   }
 }
 
+async function handleSaveProxy() {
+  saveMessage.value = "";
+
+  try {
+    await settingsStore.saveProxy(buildProxySettingsPayload());
+    saveMessage.value = t("settings.feedback.proxySaved");
+  } catch {
+    saveMessage.value = t("settings.feedback.proxySaveFailed");
+  }
+}
+
+async function handleSaveAgentSettings() {
+  saveMessage.value = "";
+
+  try {
+    await settingsStore.save(buildRuntimeAgentPayload());
+    saveMessage.value = t("settings.feedback.agentSaved");
+  } catch {
+    saveMessage.value = t("settings.feedback.agentSaveFailed");
+  }
+}
+
 async function handleTest() {
   testMessage.value = "";
 
   try {
-    const report = await settingsStore.test(buildRuntimeSettingsPayload());
+    const report = await settingsStore.test(
+      buildRuntimeSettingsPayload(selectedRuntimeEntry.value?.id ?? activeRuntimeGroup.value?.active_entry_id ?? form.active_entry_id)
+    );
     testMessage.value = report.message;
   } catch {
     testMessage.value = t("settings.feedback.testFailed");
   }
+}
+
+async function handleTestCreateRuntimeEntry() {
+  if (!currentEditableRuntimeEntry.value || !isCreateDrawer.value) {
+    return;
+  }
+
+  testMessage.value = "";
+
+  try {
+    const report = await settingsStore.test(buildRuntimeDrawerTestPayload(currentEditableRuntimeEntry.value));
+    testMessage.value = report.message;
+  } catch {
+    testMessage.value = t("settings.feedback.testFailed");
+  }
+}
+
+function resetProxyForm() {
+  applyProxyForm(proxySettings.value);
+  saveMessage.value = t("settings.feedback.proxyReset");
+}
+
+function resetAgentForm() {
+  const normalized = cloneRuntimeSettings(settingsStore.runtime);
+  Object.assign(form.agent, normalized.agent);
+  Object.assign(form.autonomy, normalized.autonomy);
+  saveMessage.value = t("settings.feedback.agentReset");
+}
+
+function appendProxyService(value: string) {
+  const next = new Set(proxyForm.services);
+  next.add(value);
+  proxyForm.services = [...next];
 }
 
 async function handlePickWorkspace() {
@@ -544,7 +819,8 @@ async function handlePickWorkspace() {
 }
 
 async function refreshAuthProfiles() {
-  if (!showAuthSettings.value) {
+  const entry = currentEditableRuntimeEntry.value;
+  if (!showAuthSettings.value || !entry) {
     authProfiles.value = [];
     return;
   }
@@ -552,7 +828,7 @@ async function refreshAuthProfiles() {
   authProfilesLoading.value = true;
 
   try {
-    const state = await listAuthProfiles(form.provider);
+    const state = await listAuthProfiles(entry.provider);
     authProfiles.value = state.profiles;
   } catch {
     authProfiles.value = [];
@@ -622,7 +898,9 @@ async function pollAuthLoginStatus(loginId?: string) {
     await refreshAuthProfiles();
 
     if (status.status === "succeeded") {
-      form.auth_profile = status.profile_name;
+      if (currentEditableRuntimeEntry.value) {
+        currentEditableRuntimeEntry.value.auth_profile = status.profile_name;
+      }
       saveMessage.value = t("settings.feedback.authLoginSucceeded", { name: status.profile_name });
       return;
     }
@@ -635,7 +913,8 @@ async function pollAuthLoginStatus(loginId?: string) {
 }
 
 async function handleStartAuthLogin() {
-  if (!showAuthSettings.value) {
+  const entry = currentEditableRuntimeEntry.value;
+  if (!showAuthSettings.value || !entry) {
     return;
   }
 
@@ -643,9 +922,9 @@ async function handleStartAuthLogin() {
   authLoginStatus.value = null;
 
   try {
-    const challenge = await startAuthLogin(form.provider, form.auth_profile.trim() || "default");
+    const challenge = await startAuthLogin(entry.provider, entry.auth_profile.trim() || "default");
     authLoginChallenge.value = challenge;
-    form.auth_profile = challenge.profile_name;
+    entry.auth_profile = challenge.profile_name;
     const loginUrl = challenge.verification_uri_complete || challenge.verification_uri;
 
     if (loginUrl) {
@@ -674,38 +953,387 @@ async function handleStartAuthLogin() {
 }
 
 function handleSelectAuthProfile(profileName: string) {
-  form.auth_profile = profileName;
+  if (!currentEditableRuntimeEntry.value) {
+    return;
+  }
+
+  currentEditableRuntimeEntry.value.auth_profile = profileName;
   saveMessage.value = t("settings.feedback.authProfileSelected", { name: profileName });
 }
 
 function applyPreset(preset: RuntimePreset) {
-  Object.assign(form, {
-    provider: preset.provider,
-    model: preset.model,
-    provider_url: preset.providerUrl,
-    credential_mode: preset.credentialMode,
-    temperature: preset.temperature
+  Object.assign(
+    createEntryDraft,
+    defaultRuntimeProviderEntry({
+      name: resolvePresetLabel(preset.labelKey),
+      provider: preset.provider,
+      model: preset.model,
+      provider_url: preset.providerUrl,
+      credential_mode: preset.credentialMode,
+      temperature: preset.temperature
+    })
+  );
+  createGroupName.value = preset.groupName;
+  saveMessage.value = t("settings.feedback.entryPresetLoaded", {
+    name: resolvePresetLabel(preset.labelKey)
   });
-  saveMessage.value = t("settings.feedback.presetLoaded", { name: resolvePresetLabel(preset.labelKey) });
   testMessage.value = "";
   settingsStore.testReport = null;
 }
 
 function applyProviderSuggestion(suggestion: ProviderSuggestion) {
-  form.provider = suggestion.provider;
-  form.provider_url = suggestion.providerUrl;
-  form.credential_mode = suggestion.credentialMode;
-  form.model = suggestion.defaultModel;
+  if (!currentEditableRuntimeEntry.value) {
+    return;
+  }
+
+  currentEditableRuntimeEntry.value.provider = suggestion.provider;
+  currentEditableRuntimeEntry.value.provider_url = suggestion.providerUrl;
+  currentEditableRuntimeEntry.value.credential_mode = suggestion.credentialMode;
+  currentEditableRuntimeEntry.value.model = suggestion.defaultModel;
   saveMessage.value = t("settings.feedback.providerSuggestionLoaded", { name: resolvePresetLabel(suggestion.labelKey) });
   testMessage.value = "";
   settingsStore.testReport = null;
 }
 
 function applyModelSuggestion(model: string) {
-  form.model = model;
+  if (!currentEditableRuntimeEntry.value) {
+    return;
+  }
+
+  currentEditableRuntimeEntry.value.model = model;
   saveMessage.value = t("settings.feedback.modelSuggestionLoaded", { name: model });
   testMessage.value = "";
   settingsStore.testReport = null;
+}
+
+function handleSelectRuntimeGroup(groupId: string) {
+  selectedRuntimeGroupId.value = groupId;
+  const group = form.groups.find((candidate) => candidate.id === groupId);
+  selectedRuntimeEntryId.value = group?.active_entry_id ?? group?.entries[0]?.id ?? "";
+  showApiKey.value = false;
+}
+
+function handleSelectRuntimeEntry(entryId: string) {
+  selectedRuntimeEntryId.value = entryId;
+  showApiKey.value = false;
+}
+
+function handleOpenCreateRuntimeEntry() {
+  resetCreateDraft();
+  runtimeEditorMode.value = "create";
+  showApiKey.value = false;
+  stopAuthLoginPolling();
+  authLoginChallenge.value = null;
+  authLoginStatus.value = null;
+}
+
+function handleOpenEditRuntimeEntry(groupId: string, entryId: string) {
+  const group = form.groups.find((candidate) => candidate.id === groupId);
+  const entry = group?.entries.find((candidate) => candidate.id === entryId);
+  if (!group || !entry) {
+    return;
+  }
+
+  drawerRuntimeGroupId.value = group.id;
+  drawerRuntimeEntryId.value = entry.id;
+  createGroupName.value = group.name;
+  Object.assign(
+    createEntryDraft,
+    defaultRuntimeProviderEntry({
+      ...entry
+    })
+  );
+  runtimeEditorMode.value = "edit";
+  showApiKey.value = false;
+  stopAuthLoginPolling();
+  authLoginChallenge.value = null;
+  authLoginStatus.value = null;
+}
+
+function handleCloseRuntimeDrawer() {
+  runtimeEditorMode.value = "closed";
+  resetCreateDraft();
+  stopAuthLoginPolling();
+  authLoginChallenge.value = null;
+  authLoginStatus.value = null;
+}
+
+function resolveTargetGroupByName(name: string) {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return selectedRuntimeGroup.value ?? activeRuntimeGroup.value ?? null;
+  }
+
+  return form.groups.find((group) => group.name.trim().toLowerCase() === normalized) ?? null;
+}
+
+function snapshotRuntimeDraftSections() {
+  return {
+    agent: {
+      ...form.agent
+    },
+    autonomy: {
+      ...form.autonomy,
+      allowed_commands: [...form.autonomy.allowed_commands],
+      allowed_roots: [...form.autonomy.allowed_roots],
+      shell_env_passthrough: [...form.autonomy.shell_env_passthrough],
+      auto_approve: [...form.autonomy.auto_approve],
+      always_ask: [...form.autonomy.always_ask]
+    }
+  };
+}
+
+function restoreRuntimeDraftSections(snapshot: ReturnType<typeof snapshotRuntimeDraftSections>) {
+  Object.assign(form.agent, snapshot.agent);
+  Object.assign(form.autonomy, {
+    ...snapshot.autonomy,
+    allowed_commands: [...snapshot.autonomy.allowed_commands],
+    allowed_roots: [...snapshot.autonomy.allowed_roots],
+    shell_env_passthrough: [...snapshot.autonomy.shell_env_passthrough],
+    auto_approve: [...snapshot.autonomy.auto_approve],
+    always_ask: [...snapshot.autonomy.always_ask]
+  });
+}
+
+function buildRuntimeEntryGroupsPayload(activeEntryId = activeRuntimeGroup.value?.active_entry_id ?? form.active_entry_id) {
+  const persisted = cloneRuntimeSettings(settingsStore.runtime);
+  const runtimePayload = buildRuntimeSettingsPayload(activeEntryId);
+
+  return cloneRuntimeSettings({
+    ...persisted,
+    active_group_id: runtimePayload.active_group_id,
+    groups: runtimePayload.groups,
+    active_entry_id: runtimePayload.active_entry_id,
+    entries: runtimePayload.entries,
+    provider: runtimePayload.provider,
+    model: runtimePayload.model,
+    provider_url: runtimePayload.provider_url,
+    api_key: runtimePayload.api_key,
+    credential_mode: runtimePayload.credential_mode,
+    auth_profile: runtimePayload.auth_profile,
+    temperature: runtimePayload.temperature
+  });
+}
+
+function buildRuntimeAgentPayload() {
+  const persisted = cloneRuntimeSettings(settingsStore.runtime);
+
+  return cloneRuntimeSettings({
+    ...persisted,
+    agent: {
+      workspace_dir: form.agent.workspace_dir,
+      compact_context: form.agent.compact_context,
+      max_tool_iterations: Number(form.agent.max_tool_iterations),
+      max_history_messages: Number(form.agent.max_history_messages),
+      max_context_tokens: Number(form.agent.max_context_tokens),
+      parallel_tools: form.agent.parallel_tools,
+      tool_dispatcher: form.agent.tool_dispatcher
+    },
+    autonomy: {
+      level: form.autonomy.level,
+      workspace_only: form.autonomy.workspace_only,
+      require_approval_for_medium_risk: form.autonomy.require_approval_for_medium_risk,
+      block_high_risk_commands: form.autonomy.block_high_risk_commands,
+      allowed_commands: [...form.autonomy.allowed_commands],
+      allowed_roots: [...form.autonomy.allowed_roots],
+      shell_env_passthrough: [...form.autonomy.shell_env_passthrough],
+      auto_approve: [...form.autonomy.auto_approve],
+      always_ask: [...form.autonomy.always_ask]
+    }
+  });
+}
+
+async function persistRuntimeEntryGroups(successMessage: string, activeEntryId = activeRuntimeGroup.value?.active_entry_id ?? form.active_entry_id) {
+  const draftSnapshot = snapshotRuntimeDraftSections();
+  const selectedGroupId = selectedRuntimeGroup.value?.id ?? "";
+  const selectedEntryId = selectedRuntimeEntryId.value;
+  const activeGroupId = form.active_group_id;
+
+  try {
+    await settingsStore.save(buildRuntimeEntryGroupsPayload(activeEntryId));
+    restoreRuntimeDraftSections(draftSnapshot);
+    selectedRuntimeGroupId.value = form.groups.some((group) => group.id === selectedGroupId)
+      ? selectedGroupId
+      : form.active_group_id;
+    form.active_group_id = form.groups.some((group) => group.id === activeGroupId) ? activeGroupId : form.active_group_id;
+    selectedRuntimeEntryId.value = selectedEntryId;
+    ensureSelectedRuntimeEntry();
+    saveMessage.value = successMessage;
+    testMessage.value = "";
+    settingsStore.testReport = null;
+    return true;
+  } catch {
+    saveMessage.value = t("settings.feedback.saveFailed");
+    return false;
+  }
+}
+
+function buildRuntimeDrawerTestPayload(entry: RuntimeProviderEntryRecord) {
+  const base = buildRuntimeSettingsPayload();
+  const groupName = createGroupName.value.trim() || resolveRuntimeGroupName(selectedRuntimeGroup.value ?? activeRuntimeGroup.value);
+  const tempGroup = cloneRuntimeGroup(
+    {
+      id: drawerRuntimeGroupId.value || createRuntimeGroupId(groupName),
+      name: groupName,
+      active_entry_id: entry.id,
+      entries: [
+        cloneRuntimeEntry({
+          ...entry,
+          id: entry.id || createRuntimeEntryId(resolveRuntimeEntryName(entry), selectedRuntimeGroup.value ?? activeRuntimeGroup.value),
+          name: entry.name.trim() || createRuntimeEntryName("", selectedRuntimeGroup.value ?? activeRuntimeGroup.value),
+          credential_mode: resolveEffectiveCredentialMode(entry),
+          temperature: Number(entry.temperature)
+        })
+      ]
+    },
+    0
+  );
+  const tempEntry = tempGroup.entries[0];
+
+  return cloneRuntimeSettings({
+    ...base,
+    active_group_id: tempGroup.id,
+    groups: [tempGroup],
+    active_entry_id: tempEntry.id,
+    entries: [tempEntry],
+    provider: tempEntry.provider,
+    model: tempEntry.model,
+    provider_url: tempEntry.provider_url,
+    api_key: tempEntry.api_key,
+    credential_mode: tempEntry.credential_mode,
+    auth_profile: tempEntry.auth_profile,
+    temperature: Number(tempEntry.temperature)
+  });
+}
+
+async function handleConfirmRuntimeDrawer() {
+  if (isEditDrawer.value) {
+    const group = drawerRuntimeGroup.value;
+    const entryIndex = group?.entries.findIndex((entry) => entry.id === drawerRuntimeEntryId.value) ?? -1;
+    if (!group || entryIndex < 0) {
+      return;
+    }
+
+    const updatedEntry = createRuntimeEntry(
+      {
+        ...createEntryDraft,
+        id: drawerRuntimeEntryId.value,
+        name: createEntryDraft.name.trim() || resolveRuntimeEntryName(createEntryDraft)
+      },
+      group
+    );
+    group.entries[entryIndex] = updatedEntry;
+    selectedRuntimeEntryId.value = updatedEntry.id;
+    const persisted = await persistRuntimeEntryGroups(
+      t("settings.feedback.updatedEntry", { name: resolveRuntimeEntryName(updatedEntry) }),
+      updatedEntry.id
+    );
+    if (persisted) {
+      handleCloseRuntimeDrawer();
+    }
+    return;
+  }
+
+  const resolvedGroupName = createGroupName.value.trim() || t("settings.groupNames.generated", { count: form.groups.length + 1 });
+  let targetGroup = resolveTargetGroupByName(resolvedGroupName);
+
+  if (!targetGroup) {
+    targetGroup = createRuntimeGroup(resolvedGroupName, {
+      entries: []
+    });
+    form.groups.push(targetGroup);
+  }
+
+  const entry = createRuntimeEntry(
+    {
+      ...createEntryDraft,
+      name: createEntryDraft.name.trim() || createRuntimeEntryName("", targetGroup)
+    },
+    targetGroup
+  );
+  targetGroup.entries.push(entry);
+  if (targetGroup.entries.length === 1) {
+    targetGroup.active_entry_id = entry.id;
+  }
+
+  form.active_group_id = targetGroup.id;
+  selectedRuntimeGroupId.value = targetGroup.id;
+  selectedRuntimeEntryId.value = entry.id;
+  const persisted = await persistRuntimeEntryGroups(
+    t("settings.feedback.createdEntry", { name: resolveRuntimeEntryName(entry) }),
+    entry.id
+  );
+  if (persisted) {
+    handleCloseRuntimeDrawer();
+  }
+}
+
+async function handleActivateRuntimeEntry(groupId: string, entryId: string) {
+  const group = form.groups.find((candidate) => candidate.id === groupId);
+  if (!group || (group.id === form.active_group_id && group.active_entry_id === entryId)) {
+    return;
+  }
+
+  group.active_entry_id = entryId;
+  form.active_group_id = group.id;
+  selectedRuntimeGroupId.value = group.id;
+  selectedRuntimeEntryId.value = entryId;
+  await persistRuntimeEntryGroups(
+    t("settings.feedback.activatedEntry", {
+      name: resolveRuntimeEntryName(group.entries.find((entry) => entry.id === entryId))
+    }),
+    entryId
+  );
+}
+
+async function handleDeleteRuntimeEntry() {
+  const group = selectedRuntimeGroup.value;
+  const entry = selectedRuntimeEntry.value;
+  if (!group || !entry) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    t("settings.prompts.deleteEntry", { name: resolveRuntimeEntryName(entry) })
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const deletedName = resolveRuntimeEntryName(entry);
+  if (isEditDrawer.value && drawerRuntimeEntryId.value === entry.id && drawerRuntimeGroupId.value === group.id) {
+    handleCloseRuntimeDrawer();
+  }
+  group.entries = group.entries.filter((candidate) => candidate.id !== entry.id);
+
+  if (group.entries.length === 0) {
+    form.groups = form.groups.filter((candidate) => candidate.id !== group.id);
+    if (form.groups.length === 0) {
+      const fallbackGroup = createRuntimeGroup(t("settings.groupNames.generated", { count: 1 }), {
+        entries: [createRuntimeEntry({ name: t("settings.entryNames.generated", { count: 1 }) }, null)]
+      });
+      fallbackGroup.active_entry_id = fallbackGroup.entries[0].id;
+      form.groups.push(fallbackGroup);
+    }
+    if (form.active_group_id === group.id) {
+      form.active_group_id = form.groups[0].id;
+    }
+    selectedRuntimeGroupId.value = form.groups[0].id;
+  } else {
+    if (group.active_entry_id === entry.id) {
+      group.active_entry_id = group.entries[0].id;
+    }
+    selectedRuntimeGroupId.value = group.id;
+    if (form.active_group_id === group.id && entry.id === form.active_entry_id) {
+      form.active_group_id = group.id;
+    }
+  }
+
+  selectedRuntimeEntryId.value = selectedRuntimeGroup.value?.active_entry_id ?? selectedRuntimeGroup.value?.entries[0]?.id ?? "";
+  await persistRuntimeEntryGroups(
+    t("settings.feedback.deletedEntry", { name: deletedName }),
+    activeRuntimeGroup.value?.active_entry_id ?? activeRuntimeGroup.value?.entries[0]?.id ?? form.active_entry_id
+  );
 }
 
 async function handleActivateProfile(profileId: string) {
@@ -909,6 +1537,14 @@ function resolveProviderKey(value: string) {
 function applyForm(runtime: RuntimeSettingsRecord) {
   const normalized = cloneRuntimeSettings(runtime);
   Object.assign(form, normalized);
+  selectedRuntimeGroupId.value = normalized.active_group_id;
+  resetCreateDraft();
+  ensureSelectedRuntimeEntry();
+}
+
+function applyProxyForm(settings: RuntimeProxySettingsRecord) {
+  const normalized = cloneProxySettings(settings);
+  Object.assign(proxyForm, normalized);
 }
 
 function applyUpdateForm(settings: UpdateSettingsRecord) {
@@ -918,15 +1554,48 @@ function applyUpdateForm(settings: UpdateSettingsRecord) {
 
 function cloneRuntimeSettings(runtime: RuntimeSettingsRecord): RuntimeSettingsRecord {
   const defaults = defaultRuntimeSettings();
+  const legacyEntry = cloneRuntimeEntry(
+    defaultRuntimeProviderEntry({
+      provider: runtime.provider,
+      model: runtime.model,
+      provider_url: runtime.provider_url,
+      api_key: runtime.api_key,
+      credential_mode: runtime.credential_mode ?? defaults.credential_mode,
+      auth_profile: runtime.auth_profile ?? defaults.auth_profile,
+      temperature: runtime.temperature ?? defaults.entries[0].temperature
+    })
+  );
+  const rawGroups = runtime.groups?.length
+    ? runtime.groups
+    : [
+        defaultRuntimeProviderGroup({
+          name: runtime.active_group_id || t("settings.groupNames.generated", { count: 1 }),
+          active_entry_id: runtime.active_entry_id || legacyEntry.id,
+          entries: runtime.entries?.length ? runtime.entries : [legacyEntry]
+        })
+      ];
+  const groups = rawGroups.map((group, groupIndex) => cloneRuntimeGroup(group, groupIndex));
+  const activeGroup =
+    groups.find((group) => group.id === runtime.active_group_id) ??
+    groups[0] ??
+    cloneRuntimeGroup(defaults.groups[0], 0);
+  const activeEntry =
+    activeGroup.entries.find((entry) => entry.id === activeGroup.active_entry_id) ??
+    activeGroup.entries[0] ??
+    cloneRuntimeEntry(defaults.entries[0]);
 
   return {
-    provider: runtime.provider,
-    model: runtime.model,
-    provider_url: runtime.provider_url,
-    api_key: runtime.api_key,
-    credential_mode: runtime.credential_mode ?? defaults.credential_mode,
-    auth_profile: runtime.auth_profile ?? defaults.auth_profile,
-    temperature: runtime.temperature,
+    active_group_id: activeGroup.id,
+    groups,
+    active_entry_id: activeEntry.id,
+    entries: [...activeGroup.entries],
+    provider: activeEntry.provider,
+    model: activeEntry.model,
+    provider_url: activeEntry.provider_url,
+    api_key: activeEntry.api_key,
+    credential_mode: activeEntry.credential_mode,
+    auth_profile: activeEntry.auth_profile,
+    temperature: activeEntry.temperature,
     proxy: {
       ...defaults.proxy,
       ...(runtime.proxy ?? defaults.proxy),
@@ -949,6 +1618,43 @@ function cloneRuntimeSettings(runtime: RuntimeSettingsRecord): RuntimeSettingsRe
   };
 }
 
+function cloneRuntimeEntry(entry: RuntimeProviderEntryRecord): RuntimeProviderEntryRecord {
+  const defaults = defaultRuntimeProviderEntry();
+
+  return {
+    id: entry.id ?? defaults.id,
+    name: entry.name ?? defaults.name,
+    provider: entry.provider ?? defaults.provider,
+    model: entry.model ?? defaults.model,
+    provider_url: entry.provider_url ?? defaults.provider_url,
+    api_key: entry.api_key ?? defaults.api_key,
+    credential_mode: entry.credential_mode ?? defaults.credential_mode,
+    auth_profile: entry.auth_profile ?? defaults.auth_profile,
+    temperature: entry.temperature ?? defaults.temperature
+  };
+}
+
+function cloneRuntimeGroup(group: RuntimeProviderGroupRecord, index: number): RuntimeProviderGroupRecord {
+  const defaults = defaultRuntimeProviderGroup();
+  const entries = (group.entries?.length ? group.entries : defaults.entries).map((entry, entryIndex) =>
+    cloneRuntimeEntry({
+      ...entry,
+      id: entry.id || `entry-${entryIndex + 1}`
+    })
+  );
+  const activeEntry =
+    entries.find((entry) => entry.id === group.active_entry_id) ??
+    entries[0] ??
+    cloneRuntimeEntry(defaults.entries[0]);
+
+  return {
+    id: group.id || `group-${index + 1}`,
+    name: group.name || t("settings.groupNames.generated", { count: index + 1 }),
+    active_entry_id: activeEntry.id,
+    entries
+  };
+}
+
 function cloneUpdateSettings(settings: UpdateSettingsRecord): UpdateSettingsRecord {
   const defaults = defaultUpdateSettings();
 
@@ -960,24 +1666,59 @@ function cloneUpdateSettings(settings: UpdateSettingsRecord): UpdateSettingsReco
   };
 }
 
-function buildRuntimeSettingsPayload(): RuntimeSettingsRecord {
+function cloneProxySettings(settings: RuntimeProxySettingsRecord): RuntimeProxySettingsRecord {
+  const defaults = defaultProxySettings();
+
+  return {
+    enabled: settings.enabled ?? defaults.enabled,
+    scope: settings.scope ?? defaults.scope,
+    http_proxy: settings.http_proxy ?? defaults.http_proxy,
+    https_proxy: settings.https_proxy ?? defaults.https_proxy,
+    all_proxy: settings.all_proxy ?? defaults.all_proxy,
+    no_proxy: [...(settings.no_proxy ?? defaults.no_proxy)],
+    services: [...(settings.services ?? defaults.services)]
+  };
+}
+
+function buildRuntimeSettingsPayload(activeEntryId = activeRuntimeGroup.value?.active_entry_id ?? form.active_entry_id): RuntimeSettingsRecord {
+  const groups = form.groups.map((group, groupIndex) =>
+    cloneRuntimeGroup(
+      {
+        ...group,
+        entries: group.entries.map((entry) =>
+          cloneRuntimeEntry({
+            ...entry,
+            credential_mode: resolveEffectiveCredentialMode(entry),
+            temperature: Number(entry.temperature)
+          })
+        )
+      },
+      groupIndex
+    )
+  );
+  const activeGroup =
+    groups.find((group) => group.id === form.active_group_id) ??
+    groups[0] ??
+    defaultRuntimeProviderGroup();
+  const activeEntry =
+    activeGroup.entries.find((entry) => entry.id === activeEntryId) ??
+    activeGroup.entries.find((entry) => entry.id === activeGroup.active_entry_id) ??
+    activeGroup.entries[0] ??
+    defaultRuntimeProviderEntry();
+
   return cloneRuntimeSettings({
-    provider: form.provider,
-    model: form.model,
-    provider_url: form.provider_url,
-    api_key: form.api_key,
-    credential_mode: effectiveCredentialMode.value,
-    auth_profile: form.auth_profile,
-    temperature: Number(form.temperature),
-    proxy: {
-      enabled: form.proxy.enabled,
-      scope: form.proxy.scope,
-      http_proxy: form.proxy.http_proxy,
-      https_proxy: form.proxy.https_proxy,
-      all_proxy: form.proxy.all_proxy,
-      no_proxy: [...form.proxy.no_proxy],
-      services: [...form.proxy.services]
-    },
+    active_group_id: activeGroup.id,
+    groups,
+    active_entry_id: activeEntry.id,
+    entries: [...activeGroup.entries],
+    provider: activeEntry.provider,
+    model: activeEntry.model,
+    provider_url: activeEntry.provider_url,
+    api_key: activeEntry.api_key,
+    credential_mode: activeEntry.credential_mode,
+    auth_profile: activeEntry.auth_profile,
+    temperature: Number(activeEntry.temperature),
+    proxy: cloneProxySettings(proxySettings.value),
     agent: {
       workspace_dir: form.agent.workspace_dir,
       compact_context: form.agent.compact_context,
@@ -1001,12 +1742,37 @@ function buildRuntimeSettingsPayload(): RuntimeSettingsRecord {
   });
 }
 
+function resolveEffectiveCredentialMode(entry: RuntimeProviderEntryRecord): RuntimeCredentialModeRecord {
+  const providerKey = resolveProviderKey(entry.provider);
+  if (providerKey === "openai-codex") {
+    return "auth_profile";
+  }
+
+  if (providerKey !== "gemini") {
+    return "api_key";
+  }
+
+  return entry.credential_mode;
+}
+
 function buildUpdateSettingsPayload(): UpdateSettingsRecord {
   return cloneUpdateSettings({
     enabled: updateForm.enabled,
     auto_check: updateForm.auto_check,
     endpoints: [...updateForm.endpoints],
     pubkey: updateForm.pubkey
+  });
+}
+
+function buildProxySettingsPayload(): RuntimeProxySettingsRecord {
+  return cloneProxySettings({
+    enabled: proxyForm.enabled,
+    scope: proxyForm.scope,
+    http_proxy: proxyForm.http_proxy,
+    https_proxy: proxyForm.https_proxy,
+    all_proxy: proxyForm.all_proxy,
+    no_proxy: [...proxyForm.no_proxy],
+    services: [...proxyForm.services]
   });
 }
 
@@ -1129,258 +1895,313 @@ function splitDelimitedList(value: string) {
       </section>
 
       <section class="panel settings-panel">
-        <div class="stack" style="gap: 12px;">
-          <div class="stack" style="gap: 6px;">
-            <strong>{{ t("settings.presetsTitle") }}</strong>
-            <span class="muted">{{ t("settings.presetsDescription") }}</span>
-          </div>
-          <div class="preset-grid">
-            <button
-              v-for="preset in runtimePresets"
-              :key="preset.id"
-              class="preset-card"
-              type="button"
-              @click="applyPreset(preset)"
-            >
-              <div class="stack" style="gap: 6px;">
-                <strong>{{ resolvePresetLabel(preset.labelKey) }}</strong>
-                <span class="muted">{{ preset.provider }}</span>
-                <span class="muted">{{ preset.model }}</span>
-              </div>
-              <p class="preset-card__note">{{ t(preset.noteKey) }}</p>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel settings-panel">
         <div class="row" style="justify-content: space-between; align-items: flex-start; margin-bottom: 12px; flex-wrap: wrap;">
           <div class="stack" style="gap: 4px;">
-            <strong>{{ t("settings.editingProfile", { name: resolveProfileName(activeProfile?.name) }) }}</strong>
-            <span class="muted">{{ t("settings.editingProfileDescription") }}</span>
+            <strong>{{ t("settings.groupsTitle") }}</strong>
+            <span class="muted">{{ t("settings.groupsDescription") }}</span>
           </div>
-          <span class="profile-inline-badge">{{ resolveProfileName(settingsStore.status.profile_name) }}</span>
+          <div class="row settings-action-row">
+            <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading" @click="handleOpenCreateRuntimeEntry">
+              {{ t("settings.newEntry") }}
+            </Button>
+          </div>
         </div>
 
-        <datalist id="runtime-provider-options">
-          <option v-for="suggestion in providerSuggestions" :key="suggestion.id" :value="suggestion.provider">{{ resolvePresetLabel(suggestion.labelKey) }}</option>
-        </datalist>
-        <datalist id="runtime-model-options">
-          <option v-for="model in visibleModelSuggestions" :key="model" :value="model">{{ model }}</option>
-        </datalist>
-        <datalist id="runtime-auth-profile-options">
-          <option v-for="profile in authProfiles" :key="profile.id" :value="profile.profile_name">{{ profile.profile_name }}</option>
-        </datalist>
+        <div class="settings-group-tabs" role="tablist">
+          <button
+            v-for="group in runtimeGroups"
+            :key="group.id"
+            class="settings-group-tab"
+            type="button"
+            :data-active="group.id === selectedRuntimeGroup?.id"
+            @click="handleSelectRuntimeGroup(group.id)"
+          >
+            <span>{{ resolveRuntimeGroupName(group) }}</span>
+            <span class="settings-group-tab__meta">{{ group.entries.length }}</span>
+          </button>
+        </div>
 
-        <div class="settings-grid">
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.provider") }}</span>
-            <input v-model="form.provider" list="runtime-provider-options" class="field" :placeholder="t('settings.providerPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.providerHint") }}</span>
-            <div v-if="visibleProviderSuggestions.length" class="suggestion-row">
-              <button
-                v-for="suggestion in visibleProviderSuggestions"
-                :key="suggestion.id"
-                class="suggestion-chip"
-                type="button"
-                @click="applyProviderSuggestion(suggestion)"
-              >
-                <span class="suggestion-chip__label">{{ resolvePresetLabel(suggestion.labelKey) }}</span>
-                <span class="suggestion-chip__meta">{{ suggestion.provider }}</span>
-              </button>
-            </div>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.model") }}</span>
-            <input v-model="form.model" list="runtime-model-options" class="field" :placeholder="t('settings.modelPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.modelHint") }}</span>
-            <div v-if="visibleModelSuggestions.length" class="suggestion-row">
-              <button
-                v-for="model in visibleModelSuggestions"
-                :key="model"
-                class="suggestion-chip"
-                type="button"
-                @click="applyModelSuggestion(model)"
-              >
-                <span class="suggestion-chip__label">{{ model }}</span>
-                <span class="suggestion-chip__meta">{{ t("settings.suggested") }}</span>
-              </button>
-            </div>
-          </label>
-
-          <label class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.providerUrl") }}</span>
-            <input v-model="form.provider_url" class="field" :placeholder="t('settings.providerUrlPlaceholder')" />
-            <span class="muted settings-field__hint">{{ t("settings.providerUrlHint") }}</span>
-            <span class="settings-context-note">{{ providerContextHint }}</span>
-          </label>
-
-          <label v-if="currentProviderSupportsAuth && !currentProviderRequiresAuthProfile" class="settings-field">
-            <span class="settings-field__label">{{ t("settings.credentialMode") }}</span>
-            <select v-model="form.credential_mode" class="select">
-              <option value="api_key">{{ t("settings.credentialModes.apiKey") }}</option>
-              <option value="auth_profile">{{ t("settings.credentialModes.authProfile") }}</option>
-            </select>
-            <span class="muted settings-field__hint">{{ t("settings.credentialModeHint") }}</span>
-          </label>
-
-          <div v-else-if="currentProviderRequiresAuthProfile" class="settings-subsection settings-field--wide">
+        <div class="entry-grid" style="margin-top: 16px;">
+          <button
+            v-for="entry in selectedRuntimeGroup?.entries ?? []"
+            :key="entry.id"
+            class="entry-card"
+            :data-active="selectedRuntimeGroup?.id === form.active_group_id && entry.id === selectedRuntimeGroup?.active_entry_id"
+            :data-selected="entry.id === selectedRuntimeEntry?.id"
+            type="button"
+            @click="handleSelectRuntimeEntry(entry.id)"
+          >
             <div class="stack" style="gap: 6px;">
-              <strong>{{ t("settings.credentialModes.authProfile") }}</strong>
-              <span class="muted">{{ t("settings.authProfileRequiredHint") }}</span>
+              <strong>{{ resolveRuntimeEntryName(entry) }}</strong>
+              <span class="muted">{{ entry.provider }}</span>
+              <span class="muted">{{ entry.model }}</span>
             </div>
-          </div>
-
-          <label v-if="showAuthSettings" class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.authProfile") }}</span>
-            <div class="row settings-secret-row">
-              <input
-                v-model="form.auth_profile"
-                list="runtime-auth-profile-options"
-                class="field"
-                :placeholder="t('settings.authProfilePlaceholder')"
-              />
-              <Button variant="secondary" :disabled="authProfilesLoading" @click="refreshAuthProfiles">
-                {{ authProfilesLoading ? t("settings.authProfilesLoading") : t("settings.refreshAuthProfiles") }}
+            <div class="row entry-card__badges">
+              <span v-if="selectedRuntimeGroup?.id === form.active_group_id && entry.id === selectedRuntimeGroup?.active_entry_id" class="profile-card__badge">{{ t("settings.entryActive") }}</span>
+              <span v-if="entry.id === selectedRuntimeEntry?.id" class="entry-card__badge entry-card__badge--selected">{{ t("settings.entrySelected") }}</span>
+            </div>
+            <div class="row entry-card__actions">
+              <Button variant="ghost" @click.stop="handleOpenEditRuntimeEntry(selectedRuntimeGroup!.id, entry.id)">{{ t("settings.edit") }}</Button>
+              <Button
+                variant="secondary"
+                :disabled="selectedRuntimeGroup?.id === form.active_group_id && entry.id === selectedRuntimeGroup?.active_entry_id"
+                @click.stop="handleActivateRuntimeEntry(selectedRuntimeGroup!.id, entry.id)"
+              >
+                {{ t("settings.activateEntry") }}
               </Button>
-              <Button variant="secondary" @click="handleStartAuthLogin">{{ t("settings.startAuthLogin") }}</Button>
+              <Button variant="ghost" @click.stop="handleSelectRuntimeEntry(entry.id); handleDeleteRuntimeEntry()">{{ t("settings.delete") }}</Button>
             </div>
-            <span class="muted settings-field__hint">{{ t("settings.authProfileHint") }}</span>
-            <span class="settings-context-note">{{ authLoginHint }}</span>
-            <div v-if="authProfiles.length" class="suggestion-row">
-              <button
-                v-for="profile in authProfiles"
-                :key="profile.id"
-                class="suggestion-chip"
-                type="button"
-                @click="handleSelectAuthProfile(profile.profile_name)"
-              >
-                <span class="suggestion-chip__label">{{ profile.profile_name }}</span>
-                <span class="suggestion-chip__meta">
-                  {{ profile.is_active ? t("settings.authProfileActive") : profile.kind }}
-                </span>
-              </button>
-            </div>
-            <span v-else-if="!authProfilesLoading" class="muted settings-field__hint">{{ t("settings.authProfilesEmpty") }}</span>
-          </label>
-
-          <div v-if="authLoginChallenge" class="settings-subsection settings-field--wide">
-            <div class="stack" style="gap: 6px;">
-              <strong>{{ t("settings.authLoginTitle") }}</strong>
-              <span v-if="authLoginChallenge.user_code" class="muted">{{ t("settings.authLoginCode", { code: authLoginChallenge.user_code }) }}</span>
-              <span class="muted">{{ t("settings.authLoginExpiresAt", { value: formatTimestamp(authLoginChallenge.expires_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
-              <a :href="authLoginChallenge.verification_uri_complete || authLoginChallenge.verification_uri" target="_blank" rel="noreferrer">
-                {{ t("settings.openAuthLoginPage") }}
-              </a>
-              <span v-if="authLoginChallenge.message" class="muted">{{ authLoginChallenge.message }}</span>
-              <span v-if="authLoginStatus" class="muted">
-                {{ t("settings.authLoginStatusLabel", { status: authLoginStatus.status, message: authLoginStatus.message }) }}
-              </span>
-            </div>
-          </div>
-
-          <label v-if="currentProviderSupportsApiKey && effectiveCredentialMode === 'api_key'" class="settings-field settings-field--wide">
-            <span class="settings-field__label">{{ t("settings.apiKey") }}</span>
-            <div class="row settings-secret-row">
-              <input
-                v-model="form.api_key"
-                :type="showApiKey ? 'text' : 'password'"
-                class="field"
-                :placeholder="t('settings.apiKeyPlaceholder')"
-              />
-              <Button variant="ghost" @click="showApiKey = !showApiKey">{{ showApiKey ? t("settings.hide") : t("settings.show") }}</Button>
-            </div>
-            <span class="muted settings-field__hint">{{ t("settings.apiKeyHint") }}</span>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("settings.temperature") }}</span>
-            <input v-model.number="form.temperature" class="field" type="number" min="0" max="2" step="0.1" />
-            <span class="muted settings-field__hint">{{ t("settings.temperatureHint") }}</span>
-          </label>
+          </button>
         </div>
       </section>
 
-      <section class="panel settings-panel">
-        <button class="settings-collapsible" type="button" :aria-expanded="showProxySettings" @click="showProxySettings = !showProxySettings">
-          <div class="stack" style="gap: 6px; text-align: left;">
-            <strong>{{ t("settings.proxyTitle") }}</strong>
-            <span class="muted">{{ t("settings.proxyDescription") }}</span>
-            <span class="settings-context-note">{{ proxySummary }}</span>
-          </div>
-          <span class="profile-inline-badge">{{ showProxySettings ? t("settings.hide") : t("settings.show") }}</span>
-        </button>
+      <datalist id="runtime-provider-options">
+        <option v-for="suggestion in providerSuggestions" :key="suggestion.id" :value="suggestion.provider">{{ resolvePresetLabel(suggestion.labelKey) }}</option>
+      </datalist>
+      <datalist id="runtime-model-options">
+        <option v-for="model in visibleModelSuggestions" :key="model" :value="model">{{ model }}</option>
+      </datalist>
+      <datalist id="runtime-auth-profile-options">
+        <option v-for="profile in authProfiles" :key="profile.id" :value="profile.profile_name">{{ profile.profile_name }}</option>
+      </datalist>
 
-        <div v-if="showProxySettings" class="stack settings-collapsible__body">
-          <div class="settings-grid">
-            <label class="settings-field">
-              <span class="settings-field__label">{{ t("settings.proxyEnabled") }}</span>
-              <label class="settings-checkbox">
-                <input v-model="form.proxy.enabled" type="checkbox" />
-                <span>{{ t("settings.proxyEnabledHint") }}</span>
+      <div v-if="isRuntimeDrawerOpen && currentEditableRuntimeEntry" class="settings-drawer-backdrop" @click="handleCloseRuntimeDrawer">
+        <aside class="settings-drawer" @click.stop>
+          <div class="settings-drawer__header">
+            <div class="stack" style="gap: 4px;">
+              <strong>{{ isCreateDrawer ? t("settings.createEntryTitle") : t("settings.editingEntry", { name: resolveRuntimeEntryName(currentEditableRuntimeEntry) }) }}</strong>
+              <span class="muted">{{ isCreateDrawer ? t("settings.createEntryDescription") : t("settings.editingEntryDescription") }}</span>
+            </div>
+            <Button variant="ghost" @click="handleCloseRuntimeDrawer">{{ t("settings.closeDrawer") }}</Button>
+          </div>
+
+          <div class="settings-drawer__body stack" style="gap: 16px;">
+            <div v-if="isCreateDrawer" class="stack" style="gap: 16px;">
+              <div class="settings-inline-note">
+                {{ t("settings.presetsDescription") }}
+              </div>
+              <div class="suggestion-row">
+                <button
+                  v-for="group in runtimeGroups"
+                  :key="group.id"
+                  class="suggestion-chip"
+                  type="button"
+                  @click="createGroupName = resolveRuntimeGroupName(group)"
+                >
+                  <span class="suggestion-chip__label">{{ resolveRuntimeGroupName(group) }}</span>
+                  <span class="suggestion-chip__meta">{{ t("settings.useExistingGroup") }}</span>
+                </button>
+              </div>
+              <div class="preset-grid">
+                <button
+                  v-for="preset in runtimePresets"
+                  :key="preset.id"
+                  class="preset-card"
+                  type="button"
+                  @click="applyPreset(preset)"
+                >
+                  <div class="stack" style="gap: 6px;">
+                    <strong>{{ resolvePresetLabel(preset.labelKey) }}</strong>
+                    <span class="muted">{{ preset.groupName }}</span>
+                    <span class="muted">{{ preset.model }}</span>
+                  </div>
+                  <p class="preset-card__note">{{ t(preset.noteKey) }}</p>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-grid">
+              <label v-if="isCreateDrawer" class="settings-field settings-field--wide">
+                <span class="settings-field__label">{{ t("settings.groupName") }}</span>
+                <input v-model="createGroupName" class="field" :placeholder="t('settings.groupNamePlaceholder')" />
+                <span class="muted settings-field__hint">{{ t("settings.groupNameHint") }}</span>
               </label>
-            </label>
 
-            <label class="settings-field">
-              <span class="settings-field__label">{{ t("settings.proxyScope") }}</span>
-              <select v-model="form.proxy.scope" class="select">
-                <option value="zeroclaw">{{ t("settings.proxyScopes.zeroclaw") }}</option>
-                <option value="services">{{ t("settings.proxyScopes.services") }}</option>
-                <option value="environment">{{ t("settings.proxyScopes.environment") }}</option>
-              </select>
-              <span class="muted settings-field__hint">{{ proxyScopeHint }}</span>
-            </label>
+              <div class="settings-subsection settings-field--wide entry-editor-summary">
+                <div class="stack" style="gap: 6px;">
+                  <strong>{{ resolveRuntimeEntryName(currentEditableRuntimeEntry) }}</strong>
+                  <span class="muted">
+                    {{ isCreateDrawer ? t("settings.entryDraftDescription") : drawerRuntimeGroup?.id === form.active_group_id && currentEditableRuntimeEntry.id === drawerRuntimeGroup?.active_entry_id ? t("settings.entryActiveDescription") : t("settings.entryInactiveDescription") }}
+                  </span>
+                </div>
+                <span class="entry-editor-summary__badge">
+                  {{ isCreateDrawer ? t("settings.entryDraft") : drawerRuntimeGroup?.id === form.active_group_id && currentEditableRuntimeEntry.id === drawerRuntimeGroup?.active_entry_id ? t("settings.entryActive") : t("settings.entryInactive") }}
+                </span>
+              </div>
 
-            <label class="settings-field">
-              <span class="settings-field__label">{{ t("settings.allProxy") }}</span>
-              <input v-model="form.proxy.all_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
-              <span class="muted settings-field__hint">{{ t("settings.allProxyHint") }}</span>
-            </label>
+              <label class="settings-field">
+                <span class="settings-field__label">{{ t("settings.entryName") }}</span>
+                <input v-model="currentEditableRuntimeEntry.name" class="field" :placeholder="t('settings.entryNamePlaceholder')" />
+                <span class="muted settings-field__hint">{{ t("settings.entryNameHint") }}</span>
+              </label>
 
-            <label class="settings-field">
-              <span class="settings-field__label">{{ t("settings.httpProxy") }}</span>
-              <input v-model="form.proxy.http_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
-              <span class="muted settings-field__hint">{{ t("settings.httpProxyHint") }}</span>
-            </label>
+              <label class="settings-field">
+                <span class="settings-field__label">{{ t("settings.provider") }}</span>
+                <input v-model="currentEditableRuntimeEntry.provider" list="runtime-provider-options" class="field" :placeholder="t('settings.providerPlaceholder')" />
+                <span class="muted settings-field__hint">{{ t("settings.providerHint") }}</span>
+                <div v-if="visibleProviderSuggestions.length" class="suggestion-row">
+                  <button
+                    v-for="suggestion in visibleProviderSuggestions"
+                    :key="suggestion.id"
+                    class="suggestion-chip"
+                    type="button"
+                    @click="applyProviderSuggestion(suggestion)"
+                  >
+                    <span class="suggestion-chip__label">{{ resolvePresetLabel(suggestion.labelKey) }}</span>
+                    <span class="suggestion-chip__meta">{{ suggestion.provider }}</span>
+                  </button>
+                </div>
+              </label>
 
-            <label class="settings-field">
-              <span class="settings-field__label">{{ t("settings.httpsProxy") }}</span>
-              <input v-model="form.proxy.https_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
-              <span class="muted settings-field__hint">{{ t("settings.httpsProxyHint") }}</span>
-            </label>
+              <label class="settings-field">
+                <span class="settings-field__label">{{ t("settings.model") }}</span>
+                <input v-model="currentEditableRuntimeEntry.model" list="runtime-model-options" class="field" :placeholder="t('settings.modelPlaceholder')" />
+                <span class="muted settings-field__hint">{{ t("settings.modelHint") }}</span>
+                <div v-if="visibleModelSuggestions.length" class="suggestion-row">
+                  <button
+                    v-for="model in visibleModelSuggestions"
+                    :key="model"
+                    class="suggestion-chip"
+                    type="button"
+                    @click="applyModelSuggestion(model)"
+                  >
+                    <span class="suggestion-chip__label">{{ model }}</span>
+                    <span class="suggestion-chip__meta">{{ t("settings.suggested") }}</span>
+                  </button>
+                </div>
+              </label>
 
-            <label class="settings-field settings-field--wide">
-              <span class="settings-field__label">{{ t("settings.noProxy") }}</span>
-              <input v-model="proxyNoProxyText" class="field" :placeholder="t('settings.noProxyPlaceholder')" />
-              <span class="muted settings-field__hint">{{ t("settings.noProxyHint") }}</span>
-            </label>
+              <label class="settings-field settings-field--wide">
+                <span class="settings-field__label">{{ t("settings.providerUrl") }}</span>
+                <input v-model="currentEditableRuntimeEntry.provider_url" class="field" :placeholder="t('settings.providerUrlPlaceholder')" />
+                <span class="muted settings-field__hint">{{ t("settings.providerUrlHint") }}</span>
+                <span class="settings-context-note">{{ providerContextHint }}</span>
+              </label>
 
-            <label v-if="form.proxy.scope === 'services'" class="settings-field settings-field--wide">
-              <span class="settings-field__label">{{ t("settings.proxyServices") }}</span>
-              <input v-model="proxyServicesText" class="field" :placeholder="t('settings.proxyServicesPlaceholder')" />
-              <span class="muted settings-field__hint">{{ t("settings.proxyServicesHint") }}</span>
-            </label>
+              <label v-if="currentProviderSupportsAuth && !currentProviderRequiresAuthProfile" class="settings-field">
+                <span class="settings-field__label">{{ t("settings.credentialMode") }}</span>
+                <select v-model="currentEditableRuntimeEntry.credential_mode" class="select">
+                  <option value="api_key">{{ t("settings.credentialModes.apiKey") }}</option>
+                  <option value="auth_profile">{{ t("settings.credentialModes.authProfile") }}</option>
+                </select>
+                <span class="muted settings-field__hint">{{ t("settings.credentialModeHint") }}</span>
+              </label>
+
+              <div v-else-if="currentProviderRequiresAuthProfile" class="settings-subsection settings-field--wide">
+                <div class="stack" style="gap: 6px;">
+                  <strong>{{ t("settings.credentialModes.authProfile") }}</strong>
+                  <span class="muted">{{ t("settings.authProfileRequiredHint") }}</span>
+                </div>
+              </div>
+
+              <label v-if="showAuthSettings" class="settings-field settings-field--wide">
+                <span class="settings-field__label">{{ t("settings.authProfile") }}</span>
+                <div class="row settings-secret-row">
+                  <input
+                    v-model="currentEditableRuntimeEntry.auth_profile"
+                    list="runtime-auth-profile-options"
+                    class="field"
+                    :placeholder="t('settings.authProfilePlaceholder')"
+                  />
+                  <Button variant="secondary" :disabled="authProfilesLoading" @click="refreshAuthProfiles">
+                    {{ authProfilesLoading ? t("settings.authProfilesLoading") : t("settings.refreshAuthProfiles") }}
+                  </Button>
+                  <Button variant="secondary" @click="handleStartAuthLogin">{{ t("settings.startAuthLogin") }}</Button>
+                </div>
+                <span class="muted settings-field__hint">{{ t("settings.authProfileHint") }}</span>
+                <span class="settings-context-note">{{ authLoginHint }}</span>
+                <div v-if="authProfiles.length" class="suggestion-row">
+                  <button
+                    v-for="profile in authProfiles"
+                    :key="profile.id"
+                    class="suggestion-chip"
+                    type="button"
+                    @click="handleSelectAuthProfile(profile.profile_name)"
+                  >
+                    <span class="suggestion-chip__label">{{ profile.profile_name }}</span>
+                    <span class="suggestion-chip__meta">
+                      {{ profile.is_active ? t("settings.authProfileActive") : profile.kind }}
+                    </span>
+                  </button>
+                </div>
+                <span v-else-if="!authProfilesLoading" class="muted settings-field__hint">{{ t("settings.authProfilesEmpty") }}</span>
+              </label>
+
+              <div v-if="authLoginChallenge" class="settings-subsection settings-field--wide">
+                <div class="stack" style="gap: 6px;">
+                  <strong>{{ t("settings.authLoginTitle") }}</strong>
+                  <span v-if="authLoginChallenge.user_code" class="muted">{{ t("settings.authLoginCode", { code: authLoginChallenge.user_code }) }}</span>
+                  <span class="muted">{{ t("settings.authLoginExpiresAt", { value: formatTimestamp(authLoginChallenge.expires_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+                  <a :href="authLoginChallenge.verification_uri_complete || authLoginChallenge.verification_uri" target="_blank" rel="noreferrer">
+                    {{ t("settings.openAuthLoginPage") }}
+                  </a>
+                  <span v-if="authLoginChallenge.message" class="muted">{{ authLoginChallenge.message }}</span>
+                  <span v-if="authLoginStatus" class="muted">
+                    {{ t("settings.authLoginStatusLabel", { status: authLoginStatus.status, message: authLoginStatus.message }) }}
+                  </span>
+                </div>
+              </div>
+
+              <label v-if="currentProviderSupportsApiKey && effectiveCredentialMode === 'api_key'" class="settings-field settings-field--wide">
+                <span class="settings-field__label">{{ t("settings.apiKey") }}</span>
+                <div class="row settings-secret-row">
+                  <input
+                    v-model="currentEditableRuntimeEntry.api_key"
+                    :type="showApiKey ? 'text' : 'password'"
+                    class="field"
+                    :placeholder="t('settings.apiKeyPlaceholder')"
+                  />
+                  <Button variant="ghost" @click="showApiKey = !showApiKey">{{ showApiKey ? t("settings.hide") : t("settings.show") }}</Button>
+                </div>
+                <span class="muted settings-field__hint">{{ t("settings.apiKeyHint") }}</span>
+              </label>
+
+              <label class="settings-field">
+                <span class="settings-field__label">{{ t("settings.temperature") }}</span>
+                <input v-model.number="currentEditableRuntimeEntry.temperature" class="field" type="number" min="0" max="2" step="0.1" />
+                <span class="muted settings-field__hint">{{ t("settings.temperatureHint") }}</span>
+              </label>
+            </div>
+
+            <div v-if="isCreateDrawer && (testMessage || settingsStore.testReport)" class="stack" style="gap: 10px;">
+              <span v-if="testMessage" :class="settingsStore.testReport?.ok ? 'muted' : 'settings-error'">{{ testMessage }}</span>
+              <div v-if="settingsStore.testReport" class="settings-test-card" :data-ok="settingsStore.testReport.ok">
+                <div class="stack" style="gap: 4px;">
+                  <strong>{{ settingsStore.testReport.ok ? t("settings.runtimeReachable") : t("settings.runtimeFailed") }}</strong>
+                  <span class="muted">{{ t("settings.providerLabel", { value: settingsStore.testReport.provider }) }}</span>
+                  <span class="muted">{{ t("settings.modelLabel", { value: settingsStore.testReport.model }) }}</span>
+                </div>
+                <p class="settings-test-card__message">{{ settingsStore.testReport.message }}</p>
+                <div v-if="settingsStore.testReport.preview" class="code-block">{{ settingsStore.testReport.preview }}</div>
+              </div>
+            </div>
           </div>
-        </div>
-      </section>
+
+          <div class="settings-drawer__footer">
+            <Button variant="secondary" @click="handleCloseRuntimeDrawer">{{ t("settings.cancelCreateEntry") }}</Button>
+            <Button v-if="isCreateDrawer" variant="secondary" :disabled="settingsStore.isTesting || settingsStore.isSaving" @click="handleTestCreateRuntimeEntry">
+              {{ settingsStore.isTesting ? t("settings.testing") : t("settings.testConnection") }}
+            </Button>
+            <Button @click="handleConfirmRuntimeDrawer">
+              {{ isCreateDrawer ? t("settings.confirmCreateEntry") : t("settings.saveEntryChanges") }}
+            </Button>
+          </div>
+        </aside>
+      </div>
 
       <section class="panel settings-panel settings-runtime-actions-panel">
         <div class="row settings-runtime-actions">
           <div class="stack settings-runtime-actions__meta">
-            <strong>{{ t("settings.saveProfile") }}</strong>
-            <span class="muted">{{ t("settings.editingProfileDescription") }}</span>
+            <strong>{{ t("settings.runtimeActionsTitle") }}</strong>
+            <span class="muted">{{ isRuntimeDrawerOpen ? t("settings.finishEntryDrawerHint") : t("settings.runtimeActionsDescription") }}</span>
             <span v-if="saveMessage" class="muted">{{ saveMessage }}</span>
             <span v-if="settingsStore.error" class="settings-error">{{ settingsStore.error }}</span>
             <span v-if="settingsStore.lastSavedAt" class="muted">{{ t("settings.lastSavedAt", { value: formatTimestamp(settingsStore.lastSavedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
           </div>
           <div class="row settings-action-row settings-runtime-actions__buttons">
-            <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isTesting" @click="resetForm">{{ t("settings.reset") }}</Button>
-            <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleTest">
+            <Button variant="secondary" :disabled="isRuntimeDrawerOpen || settingsStore.isSaving || settingsStore.isTesting" @click="resetForm">{{ t("settings.reset") }}</Button>
+            <Button variant="secondary" :disabled="isRuntimeDrawerOpen || settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleTest">
               {{ settingsStore.isTesting ? t("settings.testing") : t("settings.testConnection") }}
-            </Button>
-            <Button :disabled="settingsStore.isSaving || settingsStore.isLoading || settingsStore.isTesting" @click="handleSave">
-              {{ t("settings.saveProfile") }}
             </Button>
           </div>
         </div>
@@ -1401,6 +2222,131 @@ function splitDelimitedList(value: string) {
             </div>
             <p class="settings-test-card__message">{{ settingsStore.testReport.message }}</p>
             <div v-if="settingsStore.testReport.preview" class="code-block">{{ settingsStore.testReport.preview }}</div>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <template v-else-if="activeSettingsTab === 'proxy'">
+      <section class="panel settings-panel">
+        <div class="stack" style="gap: 12px;">
+          <div class="stack" style="gap: 6px;">
+            <strong>{{ t("settings.proxyTitle") }}</strong>
+            <span class="muted">{{ t("settings.proxyDescription") }}</span>
+            <span class="settings-context-note">{{ proxySummary }}</span>
+          </div>
+
+          <div class="settings-grid">
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.proxyEnabled") }}</span>
+              <label class="settings-checkbox">
+                <input v-model="proxyForm.enabled" type="checkbox" />
+                <span>{{ t("settings.proxyEnabledHint") }}</span>
+              </label>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.proxyScope") }}</span>
+              <select v-model="proxyForm.scope" class="select">
+                <option value="zeroclaw">{{ t("settings.proxyScopes.zeroclaw") }}</option>
+                <option value="services">{{ t("settings.proxyScopes.services") }}</option>
+                <option value="environment">{{ t("settings.proxyScopes.environment") }}</option>
+              </select>
+              <span class="muted settings-field__hint">{{ proxyScopeHint }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.allProxy") }}</span>
+              <input v-model="proxyForm.all_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.allProxyHint") }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.httpProxy") }}</span>
+              <input v-model="proxyForm.http_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.httpProxyHint") }}</span>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-field__label">{{ t("settings.httpsProxy") }}</span>
+              <input v-model="proxyForm.https_proxy" class="field" :placeholder="t('settings.proxyUrlPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.httpsProxyHint") }}</span>
+            </label>
+
+            <label class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.noProxy") }}</span>
+              <input v-model="proxyNoProxyText" class="field" :placeholder="t('settings.noProxyPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.noProxyHint") }}</span>
+            </label>
+
+            <label v-if="proxyForm.scope === 'services'" class="settings-field settings-field--wide">
+              <span class="settings-field__label">{{ t("settings.proxyServices") }}</span>
+              <input v-model="proxyServicesText" class="field" :placeholder="t('settings.proxyServicesPlaceholder')" />
+              <span class="muted settings-field__hint">{{ t("settings.proxyServicesHint") }}</span>
+            </label>
+          </div>
+
+          <div class="settings-inline-note">
+            {{ t("settings.proxyAppliesDescription") }}
+          </div>
+        </div>
+      </section>
+
+      <section v-if="supportedProxySelectors.length || supportedProxyServiceKeys.length" class="panel settings-panel">
+        <div class="stack" style="gap: 12px;">
+          <div class="stack" style="gap: 6px;">
+            <strong>{{ t("settings.proxySupportTitle") }}</strong>
+            <span class="muted">{{ t("settings.proxySupportDescription") }}</span>
+          </div>
+
+          <div v-if="supportedProxySelectors.length" class="stack" style="gap: 8px;">
+            <span class="settings-field__label">{{ t("settings.proxySupportedSelectors") }}</span>
+            <div class="suggestion-row">
+              <button
+                v-for="selector in supportedProxySelectors"
+                :key="selector"
+                class="suggestion-chip"
+                type="button"
+                @click="appendProxyService(selector)"
+              >
+                <span class="suggestion-chip__label">{{ selector }}</span>
+                <span class="suggestion-chip__meta">{{ t("settings.suggested") }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="supportedProxyServiceKeys.length" class="stack" style="gap: 8px;">
+            <span class="settings-field__label">{{ t("settings.proxySupportedKeys") }}</span>
+            <div class="suggestion-row">
+              <button
+                v-for="serviceKey in supportedProxyServiceKeys"
+                :key="serviceKey"
+                class="suggestion-chip"
+                type="button"
+                @click="appendProxyService(serviceKey)"
+              >
+                <span class="suggestion-chip__label">{{ serviceKey }}</span>
+                <span class="suggestion-chip__meta">{{ t("settings.suggested") }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel settings-panel settings-runtime-actions-panel">
+        <div class="row settings-runtime-actions">
+          <div class="stack settings-runtime-actions__meta">
+            <strong>{{ t("settings.proxySaveTitle") }}</strong>
+            <span class="muted">{{ t("settings.proxySaveDescription") }}</span>
+            <span v-if="saveMessage" class="muted">{{ saveMessage }}</span>
+            <span v-if="settingsStore.error" class="settings-error">{{ settingsStore.error }}</span>
+            <span v-if="settingsStore.lastSavedAt" class="muted">{{ t("settings.lastSavedAt", { value: formatTimestamp(settingsStore.lastSavedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+          </div>
+          <div class="row settings-action-row settings-runtime-actions__buttons">
+            <Button variant="secondary" :disabled="settingsStore.isSaving" @click="resetProxyForm">{{ t("settings.reset") }}</Button>
+            <Button :disabled="settingsStore.isSaving || settingsStore.isLoading" @click="handleSaveProxy">
+              {{ t("settings.saveProxy") }}
+            </Button>
           </div>
         </div>
       </section>
@@ -1550,6 +2496,24 @@ function splitDelimitedList(value: string) {
               <input v-model="autonomyAlwaysAskText" class="field" :placeholder="t('settings.alwaysAskToolsPlaceholder')" />
               <span class="muted settings-field__hint">{{ t("settings.alwaysAskToolsHint") }}</span>
             </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel settings-panel settings-runtime-actions-panel">
+        <div class="row settings-runtime-actions">
+          <div class="stack settings-runtime-actions__meta">
+            <strong>{{ t("settings.agentSaveTitle") }}</strong>
+            <span class="muted">{{ t("settings.agentSaveDescription") }}</span>
+            <span v-if="saveMessage" class="muted">{{ saveMessage }}</span>
+            <span v-if="settingsStore.error" class="settings-error">{{ settingsStore.error }}</span>
+            <span v-if="settingsStore.lastSavedAt" class="muted">{{ t("settings.lastSavedAt", { value: formatTimestamp(settingsStore.lastSavedAt, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+          </div>
+          <div class="row settings-action-row settings-runtime-actions__buttons">
+            <Button variant="secondary" :disabled="settingsStore.isSaving" @click="resetAgentForm">{{ t("settings.reset") }}</Button>
+            <Button :disabled="settingsStore.isSaving || settingsStore.isLoading" @click="handleSaveAgentSettings">
+              {{ t("settings.saveAgent") }}
+            </Button>
           </div>
         </div>
       </section>

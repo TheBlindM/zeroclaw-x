@@ -4,22 +4,61 @@ import {
   createRuntimeProfile,
   deleteRuntimeProfile,
   exportRuntimeProfiles,
+  getProxySettings,
+  getProxySupport,
   getRuntimeProfiles,
   getRuntimeStatus,
   importRuntimeProfiles,
+  saveProxySettings,
   saveRuntimeSettings,
   testRuntimeSettings,
   updateRuntimeProfile,
   type RuntimeConnectionReport,
+  type RuntimeProviderEntryRecord,
+  type RuntimeProviderGroupRecord,
   type RuntimeProfileRecord,
   type RuntimeProfilesExportReport,
   type RuntimeProfilesImportReport,
   type RuntimeProfilesState,
+  type RuntimeProxySettingsRecord,
+  type RuntimeProxySupportRecord,
   type RuntimeSettingsRecord,
   type RuntimeStatusRecord
 } from "@/api/tauri";
 
+export const defaultRuntimeProviderEntry = (
+  overrides: Partial<RuntimeProviderEntryRecord> = {}
+): RuntimeProviderEntryRecord => ({
+  id: "primary",
+  name: "Primary",
+  provider: "openrouter",
+  model: "anthropic/claude-sonnet-4.6",
+  provider_url: "",
+  api_key: "",
+  credential_mode: "api_key",
+  auth_profile: "",
+  temperature: 0.7,
+  ...overrides
+});
+
+export const defaultRuntimeProviderGroup = (
+  overrides: Partial<RuntimeProviderGroupRecord> = {}
+): RuntimeProviderGroupRecord => {
+  const entry = defaultRuntimeProviderEntry();
+  return {
+    id: "general",
+    name: "General",
+    active_entry_id: entry.id,
+    entries: [entry],
+    ...overrides
+  };
+};
+
 export const defaultRuntimeSettings = (): RuntimeSettingsRecord => ({
+  active_group_id: "general",
+  groups: [defaultRuntimeProviderGroup()],
+  active_entry_id: "primary",
+  entries: [defaultRuntimeProviderEntry()],
   provider: "openrouter",
   model: "anthropic/claude-sonnet-4.6",
   provider_url: "",
@@ -58,6 +97,21 @@ export const defaultRuntimeSettings = (): RuntimeSettingsRecord => ({
   }
 });
 
+export const defaultProxySettings = (): RuntimeProxySettingsRecord => ({
+  enabled: false,
+  scope: "zeroclaw",
+  http_proxy: "",
+  https_proxy: "",
+  all_proxy: "",
+  no_proxy: [],
+  services: []
+});
+
+export const defaultProxySupport = (): RuntimeProxySupportRecord => ({
+  supported_service_keys: [],
+  supported_selectors: []
+});
+
 export const defaultRuntimeStatus = (): RuntimeStatusRecord => ({
   profile_id: "default",
   profile_name: "Default",
@@ -89,6 +143,8 @@ function applyProfilesState(target: {
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     runtime: defaultRuntimeSettings() as RuntimeSettingsRecord,
+    proxySettings: defaultProxySettings() as RuntimeProxySettingsRecord,
+    proxySupport: defaultProxySupport() as RuntimeProxySupportRecord,
     profiles: [] as RuntimeProfileRecord[],
     activeProfileId: "" as string,
     status: defaultRuntimeStatus() as RuntimeStatusRecord,
@@ -102,7 +158,8 @@ export const useSettingsStore = defineStore("settings", {
     lastSavedAt: "" as string,
     error: "" as string,
     loaded: false,
-    statusLoaded: false
+    statusLoaded: false,
+    proxyLoaded: false
   }),
   getters: {
     activeProfile(state) {
@@ -111,7 +168,7 @@ export const useSettingsStore = defineStore("settings", {
   },
   actions: {
     async bootstrap() {
-      if (this.loaded || this.isLoading) {
+      if ((this.loaded && this.proxyLoaded) || this.isLoading) {
         return this.runtime;
       }
 
@@ -121,6 +178,9 @@ export const useSettingsStore = defineStore("settings", {
       try {
         const profilesState = await getRuntimeProfiles();
         applyProfilesState(this, profilesState);
+        this.proxySettings = await getProxySettings();
+        this.proxySupport = await getProxySupport();
+        this.proxyLoaded = true;
         this.loaded = true;
         await this.refreshStatus();
         return this.runtime;
@@ -157,6 +217,23 @@ export const useSettingsStore = defineStore("settings", {
         this.lastSavedAt = new Date().toISOString();
         await this.refreshStatus();
         return this.runtime;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
+      }
+    },
+    async saveProxy(settings: RuntimeProxySettingsRecord) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        this.proxySettings = await saveProxySettings(settings);
+        this.proxyLoaded = true;
+        this.lastSavedAt = new Date().toISOString();
+        void this.refreshStatus().catch(() => undefined);
+        return this.proxySettings;
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
         throw error;

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -66,7 +68,34 @@ pub struct RuntimeAutonomySettingsRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct RuntimeProviderEntryRecord {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    pub provider_url: String,
+    pub api_key: String,
+    pub credential_mode: RuntimeCredentialModeRecord,
+    pub auth_profile: String,
+    pub temperature: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RuntimeProviderGroupRecord {
+    pub id: String,
+    pub name: String,
+    pub active_entry_id: String,
+    pub entries: Vec<RuntimeProviderEntryRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RuntimeSettingsRecord {
+    pub active_group_id: String,
+    pub groups: Vec<RuntimeProviderGroupRecord>,
+    pub active_entry_id: String,
+    pub entries: Vec<RuntimeProviderEntryRecord>,
     pub provider: String,
     pub model: String,
     pub provider_url: String,
@@ -99,6 +128,12 @@ pub struct RuntimeConnectionReport {
     pub model: String,
     pub message: String,
     pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeProxySupportRecord {
+    pub supported_service_keys: Vec<String>,
+    pub supported_selectors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,14 +227,25 @@ impl Default for RuntimeAutonomySettingsRecord {
 
 impl Default for RuntimeSettingsRecord {
     fn default() -> Self {
+        let entry = RuntimeProviderEntryRecord::default();
+        let group = RuntimeProviderGroupRecord {
+            id: "default-group".to_string(),
+            name: "Default group".to_string(),
+            active_entry_id: entry.id.clone(),
+            entries: vec![entry.clone()],
+        };
         Self {
-            provider: "openrouter".to_string(),
-            model: "anthropic/claude-sonnet-4.6".to_string(),
-            provider_url: String::new(),
-            api_key: String::new(),
-            credential_mode: RuntimeCredentialModeRecord::ApiKey,
-            auth_profile: String::new(),
-            temperature: 0.7,
+            active_group_id: group.id.clone(),
+            groups: vec![group],
+            active_entry_id: entry.id.clone(),
+            entries: vec![entry.clone()],
+            provider: entry.provider,
+            model: entry.model,
+            provider_url: entry.provider_url,
+            api_key: entry.api_key,
+            credential_mode: entry.credential_mode,
+            auth_profile: entry.auth_profile,
+            temperature: entry.temperature,
             proxy: RuntimeProxySettingsRecord::default(),
             agent: RuntimeAgentSettingsRecord::default(),
             autonomy: RuntimeAutonomySettingsRecord::default(),
@@ -220,8 +266,41 @@ impl Default for RuntimeProfilesState {
     }
 }
 
-impl RuntimeSettingsRecord {
+impl Default for RuntimeProviderEntryRecord {
+    fn default() -> Self {
+        Self {
+            id: "primary".to_string(),
+            name: "Primary".to_string(),
+            provider: "openrouter".to_string(),
+            model: "anthropic/claude-sonnet-4.6".to_string(),
+            provider_url: String::new(),
+            api_key: String::new(),
+            credential_mode: RuntimeCredentialModeRecord::ApiKey,
+            auth_profile: String::new(),
+            temperature: 0.7,
+        }
+    }
+}
+
+impl Default for RuntimeProviderGroupRecord {
+    fn default() -> Self {
+        let entry = RuntimeProviderEntryRecord::default();
+        Self {
+            id: "default-group".to_string(),
+            name: "Default group".to_string(),
+            active_entry_id: entry.id.clone(),
+            entries: vec![entry],
+        }
+    }
+}
+
+impl RuntimeProviderEntryRecord {
     pub fn normalized(mut self) -> Self {
+        self.id = slugify_entry_name(&self.id);
+        if self.id.is_empty() {
+            self.id = Self::default().id;
+        }
+
         self.provider = self.provider.trim().to_string();
         if self.provider.is_empty() {
             self.provider = Self::default().provider;
@@ -235,16 +314,172 @@ impl RuntimeSettingsRecord {
         self.provider_url = self.provider_url.trim().to_string();
         self.api_key = self.api_key.trim().to_string();
         self.auth_profile = self.auth_profile.trim().to_string();
+        self.name = normalize_entry_name(
+            &self.name,
+            &self.provider,
+            &self.model,
+            self.credential_mode,
+        );
 
         if !self.temperature.is_finite() {
             self.temperature = Self::default().temperature;
         }
         self.temperature = self.temperature.clamp(0.0, 2.0);
+
+        self
+    }
+}
+
+impl RuntimeProviderGroupRecord {
+    pub fn normalized(mut self) -> Self {
+        self.entries = self
+            .entries
+            .into_iter()
+            .map(RuntimeProviderEntryRecord::normalized)
+            .collect();
+
+        if self.entries.is_empty() {
+            self.entries = vec![RuntimeProviderEntryRecord::default()];
+        } else {
+            let mut seen_ids = HashSet::new();
+            for (index, entry) in self.entries.iter_mut().enumerate() {
+                if entry.id.is_empty() {
+                    entry.id = format!("entry-{}", index + 1);
+                }
+
+                if !seen_ids.insert(entry.id.clone()) {
+                    entry.id = make_unique_entry_id(&entry.id, &seen_ids);
+                    seen_ids.insert(entry.id.clone());
+                }
+            }
+        }
+
+        self.id = slugify_group_name(&self.id);
+        if self.id.is_empty() {
+            self.id = slugify_group_name(&self.name);
+        }
+        if self.id.is_empty() {
+            self.id = "group".to_string();
+        }
+
+        let primary_entry = self.entries.first().cloned().unwrap_or_default();
+        self.name = normalize_group_name(&self.name, &primary_entry.provider, &primary_entry.model);
+        self.active_entry_id = self.active_entry_id.trim().to_string();
+        if self.active_entry_id.is_empty()
+            || !self
+                .entries
+                .iter()
+                .any(|entry| entry.id == self.active_entry_id)
+        {
+            self.active_entry_id = self.entries[0].id.clone();
+        }
+
+        self
+    }
+
+    pub fn active_entry(&self) -> Option<&RuntimeProviderEntryRecord> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id == self.active_entry_id)
+    }
+}
+
+impl RuntimeSettingsRecord {
+    pub fn normalized(mut self) -> Self {
+        self.active_group_id = self.active_group_id.trim().to_string();
+        self.active_entry_id = self.active_entry_id.trim().to_string();
+        let legacy_entry = RuntimeProviderEntryRecord {
+            id: "primary".to_string(),
+            name: normalize_entry_name("", &self.provider, &self.model, self.credential_mode),
+            provider: self.provider.trim().to_string(),
+            model: self.model.trim().to_string(),
+            provider_url: self.provider_url.trim().to_string(),
+            api_key: self.api_key.trim().to_string(),
+            credential_mode: self.credential_mode,
+            auth_profile: self.auth_profile.trim().to_string(),
+            temperature: self.temperature,
+        }
+        .normalized();
+
+        self.groups = self
+            .groups
+            .into_iter()
+            .map(RuntimeProviderGroupRecord::normalized)
+            .collect();
+
+        if self.groups.is_empty() {
+            let entries = std::mem::take(&mut self.entries)
+                .into_iter()
+                .map(RuntimeProviderEntryRecord::normalized)
+                .collect::<Vec<_>>();
+            let group_entries = if entries.is_empty() {
+                vec![legacy_entry]
+            } else {
+                entries
+            };
+            let group_name =
+                normalize_group_name("", &group_entries[0].provider, &group_entries[0].model);
+            self.groups = vec![RuntimeProviderGroupRecord {
+                id: slugify_group_name(&group_name),
+                name: group_name,
+                active_entry_id: self.active_entry_id.clone(),
+                entries: group_entries,
+            }
+            .normalized()];
+        } else {
+            let mut seen_group_ids = HashSet::new();
+            for (index, group) in self.groups.iter_mut().enumerate() {
+                if group.id.is_empty() {
+                    group.id = format!("group-{}", index + 1);
+                }
+
+                if !seen_group_ids.insert(group.id.clone()) {
+                    group.id = make_unique_group_id(&group.id, &seen_group_ids);
+                    seen_group_ids.insert(group.id.clone());
+                }
+            }
+        }
+
+        if self.active_group_id.is_empty()
+            || !self
+                .groups
+                .iter()
+                .any(|group| group.id == self.active_group_id)
+        {
+            self.active_group_id = self.groups[0].id.clone();
+        }
+
         self.proxy = self.proxy.normalized();
         self.agent = self.agent.normalized();
         self.autonomy = self.autonomy.normalized();
+        self.sync_legacy_fields_from_active_group_entry();
 
         self
+    }
+
+    pub fn active_group(&self) -> Option<&RuntimeProviderGroupRecord> {
+        self.groups
+            .iter()
+            .find(|group| group.id == self.active_group_id)
+    }
+
+    fn sync_legacy_fields_from_active_group_entry(&mut self) {
+        let fallback_group = RuntimeProviderGroupRecord::default();
+        let group = self.active_group().cloned().unwrap_or(fallback_group);
+        let entry = group
+            .active_entry()
+            .cloned()
+            .unwrap_or_else(RuntimeProviderEntryRecord::default);
+
+        self.active_entry_id = group.active_entry_id;
+        self.entries = group.entries;
+        self.provider = entry.provider;
+        self.model = entry.model;
+        self.provider_url = entry.provider_url;
+        self.api_key = entry.api_key;
+        self.credential_mode = entry.credential_mode;
+        self.auth_profile = entry.auth_profile;
+        self.temperature = entry.temperature;
     }
 }
 
@@ -364,6 +599,132 @@ fn normalize_proxy_list(values: Vec<String>) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+fn normalize_entry_name(
+    value: &str,
+    provider: &str,
+    model: &str,
+    credential_mode: RuntimeCredentialModeRecord,
+) -> String {
+    let trimmed = value.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+
+    let provider = provider.trim();
+    let model = model.trim();
+    if !provider.is_empty() && !model.is_empty() {
+        return format!("{provider} · {model}");
+    }
+
+    if !provider.is_empty() {
+        return provider.to_string();
+    }
+
+    if credential_mode == RuntimeCredentialModeRecord::AuthProfile {
+        return "Auth entry".to_string();
+    }
+
+    "Entry".to_string()
+}
+
+fn normalize_group_name(value: &str, provider: &str, model: &str) -> String {
+    let trimmed = value.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+
+    let provider_key = provider.trim().to_ascii_lowercase();
+    let model_key = model.trim().to_ascii_lowercase();
+    if provider_key.contains("openai-codex")
+        || model_key.contains("gpt-5")
+        || model_key.contains("codex")
+    {
+        return "Codex".to_string();
+    }
+    if provider_key.contains("gemini") || model_key.contains("gemini") {
+        return "Gemini".to_string();
+    }
+    if provider_key.contains("anthropic") || model_key.contains("claude") {
+        return "Claude".to_string();
+    }
+    if provider_key.contains("openai") || model_key.contains("gpt-4") {
+        return "OpenAI".to_string();
+    }
+    if provider_key.contains("ollama") {
+        return "Ollama".to_string();
+    }
+    "General".to_string()
+}
+
+fn slugify_entry_name(name: &str) -> String {
+    let slug = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if slug.is_empty() {
+        String::new()
+    } else {
+        slug
+    }
+}
+
+fn slugify_group_name(name: &str) -> String {
+    slugify_entry_name(name)
+}
+
+fn make_unique_entry_id(base: &str, seen_ids: &HashSet<String>) -> String {
+    let base = if base.is_empty() {
+        "entry".to_string()
+    } else {
+        slugify_entry_name(base)
+    };
+
+    if !seen_ids.contains(&base) {
+        return base;
+    }
+
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if !seen_ids.contains(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn make_unique_group_id(base: &str, seen_ids: &HashSet<String>) -> String {
+    let base = if base.is_empty() {
+        "group".to_string()
+    } else {
+        slugify_group_name(base)
+    };
+
+    if !seen_ids.contains(&base) {
+        return base;
+    }
+
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if !seen_ids.contains(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 fn normalize_string_list(values: Vec<String>) -> Vec<String> {

@@ -22,14 +22,15 @@ use crate::{
         settings::{
             RuntimeAutonomyLevelRecord, RuntimeConnectionReport, RuntimeProfileRecord,
             RuntimeProfilesExportReport, RuntimeProfilesImportReport, RuntimeProfilesState,
-            RuntimeProxyScopeRecord, RuntimeProxySettingsRecord, RuntimeSettingsRecord,
-            RuntimeStatusRecord,
+            RuntimeProxyScopeRecord, RuntimeProxySettingsRecord, RuntimeProxySupportRecord,
+            RuntimeSettingsRecord, RuntimeStatusRecord,
         },
     },
 };
 
 const CONNECTION_TEST_PROMPT: &str = "Reply in one short sentence confirming the runtime connection works, and mention the provider or model if available.";
 const RUNTIME_PROFILES_EXPORT_NAME: &str = "zeroclawx-runtime-profiles.json";
+const PROXY_SETTINGS_FILE_NAME: &str = "proxy-settings.json";
 
 pub struct RuntimeSession {
     pub provider: Box<dyn Provider>,
@@ -106,6 +107,33 @@ pub async fn test_runtime_settings(
         message: "Connection succeeded. The backend can reach the configured runtime.".to_string(),
         preview: Some(truncate_preview(&response)),
     })
+}
+
+pub fn load_proxy_settings(settings_path: &Path) -> Result<RuntimeProxySettingsRecord, String> {
+    let legacy_proxy = load_runtime_settings(settings_path)?.proxy;
+    let proxy_path = proxy_settings_path_from_settings_path(settings_path);
+    load_or_migrate_proxy_settings(&proxy_path, legacy_proxy)
+}
+
+pub fn save_proxy_settings(
+    settings_path: &Path,
+    settings: RuntimeProxySettingsRecord,
+) -> Result<RuntimeProxySettingsRecord, String> {
+    let proxy_path = proxy_settings_path_from_settings_path(settings_path);
+    save_proxy_settings_to_path(&proxy_path, settings)
+}
+
+pub fn get_proxy_support() -> RuntimeProxySupportRecord {
+    RuntimeProxySupportRecord {
+        supported_service_keys: ProxyConfig::supported_service_keys()
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        supported_selectors: ProxyConfig::supported_service_selectors()
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+    }
 }
 
 pub fn export_runtime_profiles(
@@ -385,7 +413,10 @@ pub(crate) fn build_resolved_runtime_config(
     settings: RuntimeSettingsRecord,
 ) -> Result<Config, String> {
     let previous_proxy = runtime_proxy_config();
-    let mut config = build_runtime_config(db_path, settings)?;
+    let normalized_settings = settings.normalized();
+    let runtime_proxy =
+        load_runtime_proxy_settings(db_path.as_path(), normalized_settings.proxy.clone())?;
+    let mut config = build_runtime_config(db_path, normalized_settings, runtime_proxy)?;
 
     if previous_proxy.scope == ProxyScope::Environment
         && !(config.proxy.enabled && config.proxy.scope == ProxyScope::Environment)
@@ -430,12 +461,17 @@ pub(crate) fn resolve_workspace_dir_from_settings(
 fn build_runtime_config(
     db_path: &PathBuf,
     settings: RuntimeSettingsRecord,
+    runtime_proxy: RuntimeProxySettingsRecord,
 ) -> Result<Config, String> {
     let runtime_root = default_runtime_root_from_db(db_path.as_path())?;
     let config_path = runtime_root.join("config.toml");
     let settings = settings.normalized();
     let workspace_dir = resolve_workspace_dir_from_settings(db_path.as_path(), &settings)?;
     let RuntimeSettingsRecord {
+        active_group_id: _,
+        groups: _,
+        active_entry_id: _,
+        entries: _,
         provider,
         model,
         provider_url,
@@ -443,7 +479,7 @@ fn build_runtime_config(
         credential_mode,
         auth_profile: _,
         temperature,
-        proxy,
+        proxy: _,
         agent,
         autonomy,
     } = settings;
@@ -457,7 +493,7 @@ fn build_runtime_config(
     config.default_provider = Some(provider);
     config.default_model = Some(model);
     config.default_temperature = temperature;
-    config.proxy = build_runtime_proxy_config(proxy);
+    config.proxy = build_runtime_proxy_config(runtime_proxy);
     config.agent = build_agent_config(agent);
     config.autonomy = build_autonomy_config(autonomy);
 
@@ -549,6 +585,62 @@ fn build_runtime_proxy_config(settings: RuntimeProxySettingsRecord) -> ProxyConf
         scope: map_proxy_scope_record(settings.scope),
         services: settings.services,
     }
+}
+
+fn load_runtime_proxy_settings(
+    db_path: &Path,
+    legacy_proxy: RuntimeProxySettingsRecord,
+) -> Result<RuntimeProxySettingsRecord, String> {
+    let proxy_path = proxy_settings_path_from_db(db_path)?;
+    load_or_migrate_proxy_settings(&proxy_path, legacy_proxy)
+}
+
+fn load_or_migrate_proxy_settings(
+    proxy_path: &Path,
+    legacy_proxy: RuntimeProxySettingsRecord,
+) -> Result<RuntimeProxySettingsRecord, String> {
+    if proxy_path.exists() {
+        let raw = fs::read_to_string(proxy_path).map_err(|error| error.to_string())?;
+        let parsed = serde_json::from_str::<RuntimeProxySettingsRecord>(&raw)
+            .map_err(|error| error.to_string())?;
+        return Ok(parsed.normalized());
+    }
+
+    Ok(legacy_proxy.normalized())
+}
+
+fn save_proxy_settings_to_path(
+    proxy_path: &Path,
+    settings: RuntimeProxySettingsRecord,
+) -> Result<RuntimeProxySettingsRecord, String> {
+    let normalized = settings.normalized();
+    build_runtime_proxy_config(normalized.clone())
+        .validate()
+        .map_err(|error| error.to_string())?;
+
+    if let Some(parent) = proxy_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    let serialized =
+        serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
+    fs::write(proxy_path, serialized).map_err(|error| error.to_string())?;
+
+    Ok(normalized)
+}
+
+fn proxy_settings_path_from_settings_path(settings_path: &Path) -> PathBuf {
+    settings_path
+        .parent()
+        .map(|parent| parent.join(PROXY_SETTINGS_FILE_NAME))
+        .unwrap_or_else(|| PathBuf::from(PROXY_SETTINGS_FILE_NAME))
+}
+
+fn proxy_settings_path_from_db(db_path: &Path) -> Result<PathBuf, String> {
+    db_path
+        .parent()
+        .map(|parent| parent.join(PROXY_SETTINGS_FILE_NAME))
+        .ok_or_else(|| "Failed to resolve proxy settings path.".to_string())
 }
 
 fn build_agent_config(

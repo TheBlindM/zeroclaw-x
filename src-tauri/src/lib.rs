@@ -40,13 +40,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn init_logging() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("zeroclawx=info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("zeroclawx=info"));
 
-    let _ = fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .try_init();
+    let _ = fmt().with_env_filter(filter).with_target(true).try_init();
 }
 
 pub fn run() {
@@ -120,11 +117,14 @@ pub fn run() {
             commands::settings::create_runtime_profile,
             commands::settings::delete_runtime_profile,
             commands::settings::export_runtime_profiles,
+            commands::settings::get_proxy_settings,
+            commands::settings::get_proxy_support,
             commands::settings::get_runtime_profiles,
             commands::settings::get_runtime_settings,
             commands::settings::get_runtime_status,
             commands::settings::import_runtime_profiles,
             commands::settings::pick_runtime_workspace,
+            commands::settings::save_proxy_settings,
             commands::settings::save_runtime_settings,
             commands::settings::test_runtime_profile,
             commands::settings::test_runtime_settings,

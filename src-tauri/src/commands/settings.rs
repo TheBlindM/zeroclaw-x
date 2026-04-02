@@ -3,8 +3,8 @@ use tauri::{AppHandle, State};
 use crate::{
     models::settings::{
         RuntimeConnectionReport, RuntimeProfileRecord, RuntimeProfilesExportReport,
-        RuntimeProfilesImportReport, RuntimeProfilesState, RuntimeSettingsRecord,
-        RuntimeStatusRecord,
+        RuntimeProfilesImportReport, RuntimeProfilesState, RuntimeProxySettingsRecord,
+        RuntimeProxySupportRecord, RuntimeSettingsRecord, RuntimeStatusRecord,
     },
     services,
     state::AppState,
@@ -23,6 +23,26 @@ pub fn get_runtime_settings(state: State<'_, AppState>) -> Result<RuntimeSetting
 #[tauri::command]
 pub fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatusRecord, String> {
     services::runtime::get_runtime_status(&state.db_path(), &state.settings_path())
+}
+
+#[tauri::command]
+pub fn get_proxy_settings(
+    state: State<'_, AppState>,
+) -> Result<RuntimeProxySettingsRecord, String> {
+    services::runtime::load_proxy_settings(&state.settings_path())
+}
+
+#[tauri::command]
+pub fn save_proxy_settings(
+    state: State<'_, AppState>,
+    settings: RuntimeProxySettingsRecord,
+) -> Result<RuntimeProxySettingsRecord, String> {
+    services::runtime::save_proxy_settings(&state.settings_path(), settings)
+}
+
+#[tauri::command]
+pub fn get_proxy_support(_: State<'_, AppState>) -> Result<RuntimeProxySupportRecord, String> {
+    Ok(services::runtime::get_proxy_support())
 }
 
 #[tauri::command]

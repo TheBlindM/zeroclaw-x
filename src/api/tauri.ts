@@ -80,6 +80,25 @@ export type RuntimeProxyScopeRecord = "environment" | "zeroclaw" | "services";
 export type RuntimeAutonomyLevelRecord = "read_only" | "supervised" | "full";
 export type RuntimeCredentialModeRecord = "api_key" | "auth_profile";
 
+export interface RuntimeProviderEntryRecord {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  provider_url: string;
+  api_key: string;
+  credential_mode: RuntimeCredentialModeRecord;
+  auth_profile: string;
+  temperature: number;
+}
+
+export interface RuntimeProviderGroupRecord {
+  id: string;
+  name: string;
+  active_entry_id: string;
+  entries: RuntimeProviderEntryRecord[];
+}
+
 export interface RuntimeProxySettingsRecord {
   enabled: boolean;
   scope: RuntimeProxyScopeRecord;
@@ -88,6 +107,11 @@ export interface RuntimeProxySettingsRecord {
   all_proxy: string;
   no_proxy: string[];
   services: string[];
+}
+
+export interface RuntimeProxySupportRecord {
+  supported_service_keys: string[];
+  supported_selectors: string[];
 }
 
 export interface RuntimeAgentSettingsRecord {
@@ -113,6 +137,10 @@ export interface RuntimeAutonomySettingsRecord {
 }
 
 export interface RuntimeSettingsRecord {
+  active_group_id: string;
+  groups: RuntimeProviderGroupRecord[];
+  active_entry_id: string;
+  entries: RuntimeProviderEntryRecord[];
   provider: string;
   model: string;
   provider_url: string;
@@ -410,6 +438,20 @@ export function getRuntimeSettings() {
 
 export function getRuntimeStatus() {
   return invoke<RuntimeStatusRecord>("get_runtime_status");
+}
+
+export function getProxySettings() {
+  return invoke<RuntimeProxySettingsRecord>("get_proxy_settings");
+}
+
+export function saveProxySettings(settings: RuntimeProxySettingsRecord) {
+  return invoke<RuntimeProxySettingsRecord>("save_proxy_settings", {
+    settings
+  });
+}
+
+export function getProxySupport() {
+  return invoke<RuntimeProxySupportRecord>("get_proxy_support");
 }
 
 export function saveRuntimeSettings(settings: RuntimeSettingsRecord) {
@@ -836,6 +878,3 @@ export function discoverMcpServerTools(serverId: string) {
     serverId
   });
 }
-
-
-

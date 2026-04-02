@@ -95,7 +95,10 @@ pub async fn start_auth_login(
         "openai-codex" => {
             let pkce = auth::openai_oauth::generate_pkce_state();
             let authorize_url = auth::openai_oauth::build_authorize_url(&pkce);
-            info!(provider, profile_name, authorize_url, "created OpenAI browser auth challenge");
+            info!(
+                provider,
+                profile_name, authorize_url, "created OpenAI browser auth challenge"
+            );
             let challenge = AuthLoginChallengeRecord {
                 login_id: login_id.clone(),
                 provider: provider.clone(),
@@ -175,7 +178,13 @@ pub async fn start_auth_login(
                 completed_at: None,
             });
 
-            spawn_gemini_login_task(runtime_root, login_id.clone(), profile_name.clone(), client, device);
+            spawn_gemini_login_task(
+                runtime_root,
+                login_id.clone(),
+                profile_name.clone(),
+                client,
+                device,
+            );
             challenge
         }
         _ => {
@@ -212,7 +221,10 @@ fn spawn_openai_login_task(
     pkce: auth::openai_oauth::PkceState,
 ) {
     async_runtime::spawn(async move {
-        info!(login_id, profile_name, "waiting for OpenAI browser auth callback");
+        info!(
+            login_id,
+            profile_name, "waiting for OpenAI browser auth callback"
+        );
         let auth_service = AuthService::new(&runtime_root, true);
         let result = async {
             let code = auth::openai_oauth::receive_loopback_code(
@@ -222,7 +234,8 @@ fn spawn_openai_login_task(
             .await?;
             let token_set =
                 auth::openai_oauth::exchange_code_for_tokens(&client, &code, &pkce).await?;
-            let account_id = auth::openai_oauth::extract_account_id_from_jwt(&token_set.access_token);
+            let account_id =
+                auth::openai_oauth::extract_account_id_from_jwt(&token_set.access_token);
             let profile = auth_service
                 .store_openai_tokens(&profile_name, token_set, account_id, true)
                 .await?;
@@ -242,7 +255,10 @@ fn spawn_gemini_login_task(
     device: auth::gemini_oauth::DeviceCodeStart,
 ) {
     async_runtime::spawn(async move {
-        info!(login_id, profile_name, "polling Gemini device-code auth flow");
+        info!(
+            login_id,
+            profile_name, "polling Gemini device-code auth flow"
+        );
         let auth_service = AuthService::new(&runtime_root, true);
         let result = async {
             let token_set = auth::gemini_oauth::poll_device_code_tokens(&client, &device).await?;
@@ -269,7 +285,10 @@ fn finalize_login_status(
 ) {
     let status = match result {
         Ok(profile_id) => {
-            info!(login_id, provider, profile_name, profile_id, "auth login succeeded");
+            info!(
+                login_id,
+                provider, profile_name, profile_id, "auth login succeeded"
+            );
             AuthLoginStatusRecord {
                 login_id: login_id.to_string(),
                 provider: provider.to_string(),
