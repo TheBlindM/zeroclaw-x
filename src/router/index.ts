@@ -8,7 +8,6 @@ import CronView from "@/views/CronView.vue";
 import SettingsView from "@/views/SettingsView.vue";
 import ChannelCreateView from "@/views/ChannelCreateView.vue";
 import McpCreateView from "@/views/McpCreateView.vue";
-import SkillCreateView from "@/views/SkillCreateView.vue";
 import SkillEditView from "@/views/SkillEditView.vue";
 
 export const routes = [
@@ -82,7 +81,7 @@ export const routes = [
   {
     path: "/skills/new",
     name: "skills-create",
-    component: SkillCreateView,
+    component: SkillEditView,
     meta: {
       titleKey: "routes.skillsCreate.title",
       descriptionKey: "routes.skillsCreate.description"

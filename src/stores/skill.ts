@@ -1,21 +1,30 @@
 import { defineStore } from "pinia";
 import {
+  createSkillEntry as createSkillEntryRequest,
   createSkill as createSkillRequest,
   deleteSkill,
+  deleteSkillEntry as deleteSkillEntryRequest,
   duplicateSkill as duplicateSkillRequest,
   exportSkill as exportSkillRequest,
   getSkillDetail,
+  getSkillFileContent as getSkillFileContentRequest,
+  importSkillAssets as importSkillAssetsRequest,
   importSkillDirectory,
   installSkillTemplate,
   listSkillTemplates,
   listSkills,
   openSkillDirectory as openSkillDirectoryRequest,
   refreshSkill as refreshSkillRequest,
+  saveSkillFileContent as saveSkillFileContentRequest,
   setSkillEnabled,
   updateSkill as updateSkillRequest,
+  type SkillAssetImportReport,
   type SkillDraft,
   type SkillDetailRecord,
+  type SkillEntryDraft,
   type SkillExportReport,
+  type SkillFileContentRecord,
+  type SkillFileEntryRecord,
   type SkillRecord,
   type SkillTemplateRecord
 } from "@/api/tauri";
@@ -50,6 +59,24 @@ export interface SkillDetailItem {
   directoryPath: string;
   manifestPath: string;
   sourcePath: string | null;
+  fileTree: SkillFileEntryItem[];
+}
+
+export interface SkillFileEntryItem {
+  name: string;
+  relativePath: string;
+  kind: "file" | "directory";
+  editable: boolean;
+  previewable: boolean;
+  sizeBytes: number | null;
+  children: SkillFileEntryItem[];
+}
+
+export interface SkillFileContentItem {
+  relativePath: string;
+  content: string;
+  editable: boolean;
+  previewable: boolean;
 }
 
 function normalizeTime(value: string | null | undefined) {
@@ -98,7 +125,29 @@ function mapDetail(record: SkillDetailRecord): SkillDetailItem {
     markdownContent: record.markdown_content,
     directoryPath: record.directory_path,
     manifestPath: record.manifest_path,
-    sourcePath: record.source_path
+    sourcePath: record.source_path,
+    fileTree: record.file_tree.map(mapSkillFileEntry)
+  };
+}
+
+function mapSkillFileEntry(record: SkillFileEntryRecord): SkillFileEntryItem {
+  return {
+    name: record.name,
+    relativePath: record.relative_path,
+    kind: record.kind === "directory" ? "directory" : "file",
+    editable: record.editable,
+    previewable: record.previewable,
+    sizeBytes: record.size_bytes,
+    children: record.children.map(mapSkillFileEntry)
+  };
+}
+
+function mapSkillFileContent(record: SkillFileContentRecord): SkillFileContentItem {
+  return {
+    relativePath: record.relative_path,
+    content: record.content,
+    editable: record.editable,
+    previewable: record.previewable
   };
 }
 
@@ -197,8 +246,8 @@ export const useSkillStore = defineStore("skills", {
         this.isLoading = false;
       }
     },
-    async loadSkillDetail(skillId: string) {
-      if (this.detailSkillId === skillId && this.activeSkillDetail) {
+    async loadSkillDetail(skillId: string, force = false) {
+      if (!force && this.detailSkillId === skillId && this.activeSkillDetail) {
         return this.activeSkillDetail;
       }
 
@@ -340,6 +389,90 @@ export const useSkillStore = defineStore("skills", {
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
         throw error;
+      }
+    },
+    async loadSkillFileContent(skillId: string, relativePath: string) {
+      this.error = "";
+
+      try {
+        return mapSkillFileContent(await getSkillFileContentRequest(skillId, relativePath));
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      }
+    },
+    async saveSkillFileContent(skillId: string, relativePath: string, content: string) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        const saved = mapSkillFileContent(await saveSkillFileContentRequest(skillId, relativePath, content));
+        if (saved.relativePath === "SKILL.md" && this.activeSkillDetail?.skill.id === skillId) {
+          this.activeSkillDetail = {
+            ...this.activeSkillDetail,
+            markdownContent: saved.content
+          };
+        }
+        return saved;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
+      }
+    },
+    async createSkillEntry(skillId: string, draft: SkillEntryDraft) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        const detail = mapDetail(await createSkillEntryRequest(skillId, draft));
+        if (this.activeSkillDetail?.skill.id === skillId) {
+          this.activeSkillDetail = detail;
+          this.detailSkillId = skillId;
+        }
+        return detail;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
+      }
+    },
+    async deleteSkillEntry(skillId: string, relativePath: string) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        const detail = mapDetail(await deleteSkillEntryRequest(skillId, relativePath));
+        if (this.activeSkillDetail?.skill.id === skillId) {
+          this.activeSkillDetail = detail;
+          this.detailSkillId = skillId;
+        }
+        return detail;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
+      }
+    },
+    async importSkillAssets(skillId: string) {
+      this.isImporting = true;
+      this.error = "";
+
+      try {
+        const report = (await importSkillAssetsRequest(skillId)) as SkillAssetImportReport | null;
+        if (report && this.activeSkillDetail?.skill.id === skillId) {
+          this.activeSkillDetail = mapDetail(await getSkillDetail(skillId));
+          this.detailSkillId = skillId;
+        }
+        return report;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isImporting = false;
       }
     },
     async toggleSkill(skillId: string, enabled: boolean) {

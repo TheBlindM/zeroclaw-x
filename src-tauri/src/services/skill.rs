@@ -12,13 +12,15 @@ use tauri_plugin_dialog::DialogExt;
 use crate::{
     db,
     models::skill::{
-        SkillDetailRecord, SkillDraft, SkillExportReport, SkillRecord, SkillTemplateRecord,
+        SkillAssetImportReport, SkillDetailRecord, SkillDraft, SkillEntryDraft, SkillExportReport,
+        SkillFileContentRecord, SkillFileEntryRecord, SkillRecord, SkillTemplateRecord,
     },
     state::AppState,
 };
 
 const STARTER_TEMPLATE_AUTHOR: &str = "ZeroClawX starter";
 const IMPORTED_SKILL_FALLBACK_SLUG: &str = "imported-skill";
+const STANDARD_SKILL_DIRECTORIES: &[&str] = &["scripts", "references", "assets"];
 
 #[derive(Serialize, Deserialize)]
 struct SkillTomlManifest {
@@ -131,15 +133,148 @@ pub fn get_skill_detail(state: &AppState, skill_id: &str) -> Result<SkillDetailR
     let skill =
         db::get_skill(&state.db_path(), skill_id)?.ok_or_else(|| "Skill not found.".to_string())?;
     let directory = skill_directory(state, &skill.slug);
-    let document = load_skill_document(&directory, Some(skill.slug.clone()))?;
+    skill_detail_from_record(&skill, &directory)
+}
 
-    Ok(SkillDetailRecord {
-        skill: skill.clone(),
-        markdown_content: document.markdown_content,
-        directory_path: directory.display().to_string(),
-        manifest_path: directory.join("SKILL.toml").display().to_string(),
-        source_path: imported_source_path(&skill),
+pub fn get_skill_file_content(
+    state: &AppState,
+    skill_id: &str,
+    relative_path: &str,
+) -> Result<SkillFileContentRecord, String> {
+    let skill =
+        db::get_skill(&state.db_path(), skill_id)?.ok_or_else(|| "Skill not found.".to_string())?;
+    let directory = skill_directory(state, &skill.slug);
+    let path = resolve_skill_relative_path(&directory, relative_path)?;
+    if !path.exists() || !path.is_file() {
+        return Err("Skill file not found.".to_string());
+    }
+
+    let previewable = is_previewable_text_path(relative_path);
+    if !previewable {
+        return Err("This file type is not previewable in the built-in editor.".to_string());
+    }
+
+    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| "This file is not UTF-8 text and cannot be previewed here.".to_string())?;
+
+    Ok(SkillFileContentRecord {
+        relative_path: normalize_relative_path(relative_path)?,
+        content,
+        editable: is_editable_text_path(relative_path),
+        previewable,
     })
+}
+
+pub fn save_skill_file_content(
+    state: &AppState,
+    skill_id: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<SkillFileContentRecord, String> {
+    let skill =
+        db::get_skill(&state.db_path(), skill_id)?.ok_or_else(|| "Skill not found.".to_string())?;
+    let directory = skill_directory(state, &skill.slug);
+    let path = resolve_skill_relative_path(&directory, relative_path)?;
+    let normalized_relative_path = normalize_relative_path(relative_path)?;
+
+    if !path.exists() || !path.is_file() {
+        return Err("Skill file not found.".to_string());
+    }
+
+    if !is_editable_text_path(&normalized_relative_path) {
+        return Err("This file cannot be edited in the built-in editor.".to_string());
+    }
+
+    let normalized_content = if normalized_relative_path.ends_with(".md")
+        || normalized_relative_path.ends_with(".txt")
+        || normalized_relative_path == "SKILL.md"
+    {
+        normalize_markdown(content)
+    } else {
+        content.to_string()
+    };
+
+    fs::write(&path, normalized_content.as_bytes()).map_err(|error| error.to_string())?;
+    sync_runtime_skills(&state.db_path(), &state.settings_path())?;
+
+    Ok(SkillFileContentRecord {
+        relative_path: normalized_relative_path,
+        content: normalized_content,
+        editable: true,
+        previewable: true,
+    })
+}
+
+pub fn create_skill_entry(
+    state: &AppState,
+    skill_id: &str,
+    draft: &SkillEntryDraft,
+) -> Result<SkillDetailRecord, String> {
+    let skill =
+        db::get_skill(&state.db_path(), skill_id)?.ok_or_else(|| "Skill not found.".to_string())?;
+    let directory = skill_directory(state, &skill.slug);
+    let parent_path = resolve_skill_relative_path(&directory, &draft.parent_path)?;
+    if !parent_path.exists() || !parent_path.is_dir() {
+        return Err("The selected parent folder does not exist.".to_string());
+    }
+
+    let entry_name = draft.name.trim();
+    if entry_name.is_empty() {
+        return Err("File or folder name is required.".to_string());
+    }
+    if entry_name.contains('/') || entry_name.contains('\\') {
+        return Err(
+            "Use the parent folder selector instead of path separators in the entry name."
+                .to_string(),
+        );
+    }
+
+    let destination = parent_path.join(entry_name);
+    if destination.exists() {
+        return Err("A file or folder with this name already exists.".to_string());
+    }
+
+    match draft.entry_kind.trim() {
+        "directory" => fs::create_dir_all(&destination).map_err(|error| error.to_string())?,
+        "file" => {
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            fs::write(&destination, b"").map_err(|error| error.to_string())?;
+        }
+        _ => return Err("Entry kind must be \"file\" or \"directory\".".to_string()),
+    }
+
+    sync_runtime_skills(&state.db_path(), &state.settings_path())?;
+    skill_detail_from_record(&skill, &directory)
+}
+
+pub fn delete_skill_entry(
+    state: &AppState,
+    skill_id: &str,
+    relative_path: &str,
+) -> Result<SkillDetailRecord, String> {
+    let skill =
+        db::get_skill(&state.db_path(), skill_id)?.ok_or_else(|| "Skill not found.".to_string())?;
+    let directory = skill_directory(state, &skill.slug);
+    let normalized_relative_path = normalize_relative_path(relative_path)?;
+    if normalized_relative_path == "SKILL.md" || normalized_relative_path == "SKILL.toml" {
+        return Err("Core skill files cannot be deleted.".to_string());
+    }
+    let path = resolve_skill_relative_path(&directory, &normalized_relative_path)?;
+    if !path.exists() {
+        return Err("Skill file or folder not found.".to_string());
+    }
+
+    if path.is_dir() {
+        fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
+    } else {
+        fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+
+    sync_runtime_skills(&state.db_path(), &state.settings_path())?;
+    skill_detail_from_record(&skill, &directory)
 }
 
 pub fn install_template(state: &AppState, template_id: &str) -> Result<SkillRecord, String> {
@@ -150,7 +285,10 @@ pub fn install_template(state: &AppState, template_id: &str) -> Result<SkillReco
     let existing = ensure_template_install_allowed(&state.db_path(), &template)?;
     let document = template_document(&template, template.slug.to_string());
     let destination = skill_directory_from_db(&state.db_path(), template.slug);
-    let enabled = existing.as_ref().map(|record| record.enabled).unwrap_or(true);
+    let enabled = existing
+        .as_ref()
+        .map(|record| record.enabled)
+        .unwrap_or(true);
 
     materialize_skill_directory(&destination, &document)?;
     let record = upsert_skill_record(
@@ -310,7 +448,10 @@ pub fn export_skill(
     let destination = parent.join(&skill.slug);
 
     if destination.exists() {
-        return Err("The selected export location already contains a folder with this skill slug.".to_string());
+        return Err(
+            "The selected export location already contains a folder with this skill slug."
+                .to_string(),
+        );
     }
 
     copy_directory_recursive(&source, &destination)?;
@@ -318,6 +459,59 @@ pub fn export_skill(
     Ok(Some(SkillExportReport {
         path: destination.display().to_string(),
     }))
+}
+
+pub fn import_skill_assets(
+    app: &AppHandle,
+    state: &AppState,
+    skill_id: &str,
+) -> Result<Option<SkillAssetImportReport>, String> {
+    let skill =
+        db::get_skill(&state.db_path(), skill_id)?.ok_or_else(|| "Skill not found.".to_string())?;
+    let destination_root = skill_directory(state, &skill.slug).join("assets");
+    fs::create_dir_all(&destination_root).map_err(|error| error.to_string())?;
+
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("Import asset files")
+        .blocking_pick_files();
+
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+
+    let paths = selected
+        .into_iter()
+        .map(|entry| {
+            entry
+                .into_path()
+                .map_err(|_| "Failed to resolve one of the selected asset paths.".to_string())
+        })
+        .collect::<Result<Vec<PathBuf>, _>>()?;
+
+    let mut imported_paths = Vec::new();
+    for source_path in paths {
+        if !source_path.is_file() {
+            continue;
+        }
+        let file_name = source_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "Failed to resolve one of the selected asset names.".to_string())?;
+        let destination_path = next_available_copy_path(&destination_root, file_name);
+        fs::copy(&source_path, &destination_path)
+            .map_err(|error| format!("Failed to import {}: {error}", source_path.display()))?;
+        let relative_path = destination_path
+            .strip_prefix(skill_directory(state, &skill.slug))
+            .map_err(|error| error.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        imported_paths.push(relative_path);
+    }
+
+    sync_runtime_skills(&state.db_path(), &state.settings_path())?;
+    Ok(Some(SkillAssetImportReport { imported_paths }))
 }
 
 pub fn open_skill_directory(state: &AppState, skill_id: &str) -> Result<String, String> {
@@ -388,7 +582,10 @@ pub fn sync_runtime_skills_to_workspace(
 
 fn ensure_skill_slug_available(db_path: &Path, slug: &str) -> Result<(), String> {
     if db::get_skill_by_slug(db_path, slug)?.is_some() {
-        return Err("Skill slug already exists. Rename, duplicate, or delete the existing skill first.".to_string());
+        return Err(
+            "Skill slug already exists. Rename, duplicate, or delete the existing skill first."
+                .to_string(),
+        );
     }
 
     Ok(())
@@ -494,6 +691,21 @@ fn skill_directory(state: &AppState, slug: &str) -> PathBuf {
 
 fn imported_source_path(skill: &SkillRecord) -> Option<String> {
     (skill.source_kind == "imported").then(|| skill.source_label.clone())
+}
+
+fn skill_detail_from_record(
+    skill: &SkillRecord,
+    directory: &Path,
+) -> Result<SkillDetailRecord, String> {
+    let document = load_skill_document(directory, Some(skill.slug.clone()))?;
+    Ok(SkillDetailRecord {
+        skill: skill.clone(),
+        markdown_content: document.markdown_content,
+        directory_path: directory.display().to_string(),
+        manifest_path: directory.join("SKILL.toml").display().to_string(),
+        source_path: imported_source_path(skill),
+        file_tree: load_skill_file_tree(directory)?,
+    })
 }
 
 fn template_document(template: &SkillTemplateSeed, slug: String) -> ParsedSkillDocument {
@@ -604,11 +816,7 @@ fn parse_skill_manifest(
     let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let manifest = toml::from_str::<SkillTomlManifest>(&raw)
         .map_err(|error| format!("Failed to parse SKILL.toml: {error}"))?;
-    let slug = normalize_slug(
-        preferred_slug
-            .as_deref()
-            .unwrap_or(&manifest.skill.name),
-    );
+    let slug = normalize_slug(preferred_slug.as_deref().unwrap_or(&manifest.skill.name));
 
     Ok(ParsedSkillMetadata {
         slug,
@@ -658,11 +866,13 @@ fn materialize_skill_directory(path: &Path, document: &ParsedSkillDocument) -> R
     fs::create_dir_all(path).map_err(|error| error.to_string())?;
     write_skill_markdown(path, &document.markdown_content)?;
     write_skill_manifest(path, &document.metadata)?;
+    ensure_standard_skill_directories(path)?;
     Ok(())
 }
 
 fn write_skill_markdown(path: &Path, markdown: &str) -> Result<(), String> {
-    fs::write(path.join("SKILL.md"), normalize_markdown(markdown)).map_err(|error| error.to_string())
+    fs::write(path.join("SKILL.md"), normalize_markdown(markdown))
+        .map_err(|error| error.to_string())
 }
 
 fn write_skill_manifest(path: &Path, metadata: &ParsedSkillMetadata) -> Result<(), String> {
@@ -680,7 +890,11 @@ fn write_skill_manifest(path: &Path, metadata: &ParsedSkillMetadata) -> Result<(
 }
 
 fn render_markdown_from_metadata(metadata: &ParsedSkillMetadata) -> String {
-    let mut rendered = format!("# {}\n{}\n", metadata.name.trim(), metadata.description.trim());
+    let mut rendered = format!(
+        "# {}\n{}\n",
+        metadata.name.trim(),
+        metadata.description.trim()
+    );
     if !metadata.author.trim().is_empty() || !metadata.version.trim().is_empty() {
         rendered.push('\n');
         if !metadata.version.trim().is_empty() {
@@ -841,6 +1055,215 @@ fn normalize_markdown(markdown: &str) -> String {
     }
 }
 
+fn ensure_standard_skill_directories(path: &Path) -> Result<(), String> {
+    for directory in STANDARD_SKILL_DIRECTORIES {
+        fs::create_dir_all(path.join(directory)).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn load_skill_file_tree(path: &Path) -> Result<Vec<SkillFileEntryRecord>, String> {
+    let mut entries = Vec::new();
+
+    for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let relative_path = name.clone();
+        let full_path = entry.path();
+        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+
+        let children = if file_type.is_dir() {
+            load_skill_file_tree_recursive(path, &full_path)?
+        } else {
+            Vec::new()
+        };
+
+        entries.push(SkillFileEntryRecord {
+            name,
+            relative_path: relative_path.clone(),
+            kind: if file_type.is_dir() {
+                "directory".to_string()
+            } else {
+                "file".to_string()
+            },
+            editable: file_type.is_file() && is_editable_text_path(&relative_path),
+            previewable: file_type.is_file() && is_previewable_text_path(&relative_path),
+            size_bytes: file_type.is_file().then_some(metadata.len()),
+            children,
+        });
+    }
+
+    sort_skill_file_entries(&mut entries);
+    Ok(entries)
+}
+
+fn load_skill_file_tree_recursive(
+    root: &Path,
+    directory: &Path,
+) -> Result<Vec<SkillFileEntryRecord>, String> {
+    let mut entries = Vec::new();
+
+    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let full_path = entry.path();
+        let relative_path = full_path
+            .strip_prefix(root)
+            .map_err(|error| error.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+
+        let children = if file_type.is_dir() {
+            load_skill_file_tree_recursive(root, &full_path)?
+        } else {
+            Vec::new()
+        };
+
+        entries.push(SkillFileEntryRecord {
+            name: entry.file_name().to_string_lossy().to_string(),
+            relative_path: relative_path.clone(),
+            kind: if file_type.is_dir() {
+                "directory".to_string()
+            } else {
+                "file".to_string()
+            },
+            editable: file_type.is_file() && is_editable_text_path(&relative_path),
+            previewable: file_type.is_file() && is_previewable_text_path(&relative_path),
+            size_bytes: file_type.is_file().then_some(metadata.len()),
+            children,
+        });
+    }
+
+    sort_skill_file_entries(&mut entries);
+    Ok(entries)
+}
+
+fn sort_skill_file_entries(entries: &mut [SkillFileEntryRecord]) {
+    entries.sort_by(|left, right| {
+        skill_entry_order(&left.relative_path, &left.kind)
+            .cmp(&skill_entry_order(&right.relative_path, &right.kind))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+}
+
+fn skill_entry_order(relative_path: &str, kind: &str) -> (u8, u8) {
+    let root_name = relative_path.split('/').next().unwrap_or(relative_path);
+    let bucket = match root_name {
+        "SKILL.md" => 0,
+        "SKILL.toml" => 1,
+        "scripts" => 2,
+        "references" => 3,
+        "assets" => 4,
+        "agents" => 5,
+        _ => 6,
+    };
+    let kind_order = if kind == "directory" { 0 } else { 1 };
+    (bucket, kind_order)
+}
+
+fn normalize_relative_path(relative_path: &str) -> Result<String, String> {
+    let path = relative_path.trim();
+    if path.is_empty() {
+        return Err("A relative path is required.".to_string());
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => normalized.push(part),
+            _ => {
+                return Err(
+                    "Only relative paths inside the skill directory are allowed.".to_string(),
+                )
+            }
+        }
+    }
+
+    let normalized_string = normalized.to_string_lossy().replace('\\', "/");
+    if normalized_string.is_empty() {
+        Err("A relative path is required.".to_string())
+    } else {
+        Ok(normalized_string)
+    }
+}
+
+fn resolve_skill_relative_path(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    if relative_path.trim().is_empty() {
+        return Ok(root.to_path_buf());
+    }
+
+    Ok(root.join(normalize_relative_path(relative_path)?))
+}
+
+fn is_previewable_text_path(relative_path: &str) -> bool {
+    matches!(
+        Path::new(relative_path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "md" | "markdown"
+                | "txt"
+                | "json"
+                | "toml"
+                | "yaml"
+                | "yml"
+                | "rs"
+                | "ts"
+                | "tsx"
+                | "js"
+                | "jsx"
+                | "vue"
+                | "py"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "css"
+                | "html"
+        )
+    ) || relative_path == "SKILL.md"
+        || relative_path == "SKILL.toml"
+}
+
+fn is_editable_text_path(relative_path: &str) -> bool {
+    if relative_path == "SKILL.toml" {
+        return false;
+    }
+
+    is_previewable_text_path(relative_path)
+}
+
+fn next_available_copy_path(root: &Path, file_name: &str) -> PathBuf {
+    let candidate = root.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("asset");
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+
+    let mut index = 2;
+    loop {
+        let candidate = root.join(format!("{stem}-{index}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
 fn slugify(value: &str) -> String {
     let mut slug = value
         .chars()
@@ -916,14 +1339,16 @@ mod tests {
                 version: "1.2.3".to_string(),
                 author: "Team Zero".to_string(),
                 tags_json: "[\"triage\", \"action\"]".to_string(),
-                markdown_content: "# Repository Triage\nSummarize a repository with action items.\n".to_string(),
+                markdown_content:
+                    "# Repository Triage\nSummarize a repository with action items.\n".to_string(),
                 enabled: false,
             },
         )
         .expect("skill should update");
 
         let detail = get_skill_detail(&state, &created.id).expect("detail should load");
-        let manifest = fs::read_to_string(skill_dir.join("SKILL.toml")).expect("manifest should read");
+        let manifest =
+            fs::read_to_string(skill_dir.join("SKILL.toml")).expect("manifest should read");
         assert!(manifest.contains("version = \"1.2.3\""));
         assert!(detail.markdown_content.contains("action items"));
         assert_eq!(updated.enabled, false);
@@ -939,7 +1364,8 @@ mod tests {
                 version: "1.2.3".to_string(),
                 author: "Team Zero".to_string(),
                 tags_json: "[\"triage\", \"action\"]".to_string(),
-                markdown_content: "# Repository Triage\nSummarize a repository with action items.\n".to_string(),
+                markdown_content:
+                    "# Repository Triage\nSummarize a repository with action items.\n".to_string(),
                 enabled: false,
             },
         )
@@ -982,7 +1408,8 @@ mod tests {
                 version: String::new(),
                 author: String::new(),
                 tags_json: "[]".to_string(),
-                markdown_content: "# Repository Summary\nSummarize the codebase quickly.\n".to_string(),
+                markdown_content: "# Repository Summary\nSummarize the codebase quickly.\n"
+                    .to_string(),
                 enabled: true,
             },
         )
@@ -993,7 +1420,9 @@ mod tests {
             get_skill_detail(&state, &duplicated.id).expect("duplicate detail should load");
         assert_eq!(duplicated.source_kind, "manual");
         assert_ne!(duplicated.slug, created.slug);
-        assert!(duplicated_detail.markdown_content.contains("# Repository Summary Copy"));
+        assert!(duplicated_detail
+            .markdown_content
+            .contains("# Repository Summary Copy"));
 
         let _ = fs::remove_dir_all(app_dir);
     }
@@ -1011,7 +1440,8 @@ mod tests {
         .expect("source markdown should write");
 
         let imported_document =
-            load_skill_document(&source_dir, Some("imported-skill".to_string())).expect("document should parse");
+            load_skill_document(&source_dir, Some("imported-skill".to_string()))
+                .expect("document should parse");
         let imported_dir = skill_directory(&state, &imported_document.metadata.slug);
         copy_directory_recursive(&source_dir, &imported_dir).expect("source should copy");
         materialize_skill_directory(&imported_dir, &imported_document)
@@ -1034,7 +1464,9 @@ mod tests {
         let refreshed = refresh_skill(&state, &imported.id).expect("refresh should succeed");
         let detail = get_skill_detail(&state, &imported.id).expect("detail should load");
         assert_eq!(refreshed.slug, imported.slug);
-        assert!(detail.markdown_content.contains("Updated description from source"));
+        assert!(detail
+            .markdown_content
+            .contains("Updated description from source"));
         assert!(imported_dir.join("SKILL.toml").exists());
 
         let _ = fs::remove_dir_all(app_dir);

@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { storeToRefs } from "pinia";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
+import SkillFileTree from "@/components/skills/SkillFileTree.vue";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
-import { parseTags, useSkillStore, type SkillItem, type SkillTemplateItem } from "@/stores/skill";
+import { parseTags, useSkillStore, type SkillFileEntryItem, type SkillItem, type SkillTemplateItem } from "@/stores/skill";
 
 const skillStore = useSkillStore();
 const router = useRouter();
@@ -15,6 +17,61 @@ const { t } = useI18n();
 
 const search = ref("");
 const feedback = ref("");
+const previewPath = ref("SKILL.md");
+const previewContent = ref("");
+const previewLoading = ref(false);
+const previewEntry = ref<SkillFileEntryItem | null>(null);
+const detailFileStats = computed(() => {
+  const totals = {
+    files: 0,
+    folders: 0,
+    assets: 0
+  };
+
+  function walk(entries: SkillFileEntryItem[]) {
+    for (const entry of entries) {
+      if (entry.kind === "directory") {
+        totals.folders += 1;
+        walk(entry.children);
+      } else {
+        totals.files += 1;
+        if (!entry.previewable) {
+          totals.assets += 1;
+        }
+      }
+    }
+  }
+
+  walk(activeSkillDetail.value?.fileTree ?? []);
+  return totals;
+});
+const previewFileExtension = computed(() => {
+  const path = previewEntry.value?.relativePath ?? "";
+  const lastDot = path.lastIndexOf(".");
+  return lastDot >= 0 ? path.slice(lastDot + 1).toLowerCase() : "";
+});
+const previewFileSizeLabel = computed(() => {
+  const size = previewEntry.value?.sizeBytes;
+  if (typeof size !== "number") {
+    return "";
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+});
+const previewAssetUrl = computed(() => {
+  if (!activeSkillDetail.value || !previewEntry.value || previewEntry.value.kind !== "file" || previewEntry.value.previewable) {
+    return "";
+  }
+  if (!isImagePath(previewEntry.value.relativePath)) {
+    return "";
+  }
+  return convertFileSrc(joinSkillPath(activeSkillDetail.value.directoryPath, previewEntry.value.relativePath));
+});
 
 const filteredSkills = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -48,10 +105,15 @@ watch(
 
     if (skillStore.detailSkillId !== skill.id) {
       try {
-        await skillStore.loadSkillDetail(skill.id);
+        await skillStore.loadSkillDetail(skill.id, true);
       } catch {
         feedback.value = t("skills.feedback.loadDetailFailed");
       }
+    }
+
+    const firstPreviewable = findFirstPreviewable(skillStore.activeSkillDetail?.fileTree ?? []);
+    if (firstPreviewable) {
+      await handleSelectPreview(firstPreviewable.relativePath);
     }
   },
   { immediate: true }
@@ -83,9 +145,80 @@ function resolveSkillTags(skill: SkillItem) {
   return parseTags(skill.tagsJson);
 }
 
+function joinSkillPath(root: string, relativePath: string) {
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]+$/, "")}${separator}${relativePath.split("/").join(separator)}`;
+}
+
+function isImagePath(relativePath: string) {
+  return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].some((extension) =>
+    relativePath.toLowerCase().endsWith(extension)
+  );
+}
+
 function handleSelectSkill(skillId: string) {
   feedback.value = "";
   skillStore.setActiveSkill(skillId);
+}
+
+function findFileEntry(entries: SkillFileEntryItem[], relativePath: string): SkillFileEntryItem | null {
+  for (const entry of entries) {
+    if (entry.relativePath === relativePath) {
+      return entry;
+    }
+
+    const nested = findFileEntry(entry.children, relativePath);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+function findFirstPreviewable(entries: SkillFileEntryItem[]): SkillFileEntryItem | null {
+  for (const entry of entries) {
+    if (entry.kind === "file" && entry.previewable) {
+      return entry;
+    }
+
+    const nested = findFirstPreviewable(entry.children);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+async function handleSelectPreview(relativePath: string) {
+  if (!activeSkill.value || !activeSkillDetail.value) {
+    return;
+  }
+
+  const entry = findFileEntry(activeSkillDetail.value.fileTree, relativePath);
+  if (!entry) {
+    return;
+  }
+
+  previewPath.value = relativePath;
+  previewEntry.value = entry;
+  previewContent.value = "";
+
+  if (entry.kind === "directory" || !entry.previewable) {
+    return;
+  }
+
+  previewLoading.value = true;
+
+  try {
+    const file = await skillStore.loadSkillFileContent(activeSkill.value.id, relativePath);
+    previewContent.value = file.content;
+  } catch {
+    feedback.value = t("skills.feedback.loadFileFailed");
+  } finally {
+    previewLoading.value = false;
+  }
 }
 
 function handleEditSkill(skillId: string) {
@@ -347,6 +480,18 @@ async function handleDeleteSkill(skill: SkillItem) {
               <span class="muted">{{ t("skills.slug") }}</span>
               <strong>{{ activeSkillDetail.skill.slug }}</strong>
             </div>
+            <div class="summary-card summary-card--static">
+              <span class="muted">{{ t("skills.fileCount") }}</span>
+              <strong>{{ detailFileStats.files }}</strong>
+            </div>
+            <div class="summary-card summary-card--static">
+              <span class="muted">{{ t("skills.folderCount") }}</span>
+              <strong>{{ detailFileStats.folders }}</strong>
+            </div>
+            <div class="summary-card summary-card--static">
+              <span class="muted">{{ t("skills.assetCount") }}</span>
+              <strong>{{ detailFileStats.assets }}</strong>
+            </div>
           </div>
 
           <div class="row" style="flex-wrap: wrap;">
@@ -382,7 +527,60 @@ async function handleDeleteSkill(skill: SkillItem) {
             </div>
           </div>
 
-          <pre class="code-block skills-markdown">{{ activeSkillDetail.markdownContent }}</pre>
+          <div class="skills-editor-layout">
+            <div class="skills-editor-layout__sidebar">
+              <SkillFileTree
+                :entries="activeSkillDetail.fileTree"
+                :selected-path="previewPath"
+                @select="handleSelectPreview"
+              />
+            </div>
+            <div class="skills-editor-layout__main">
+              <div class="stack" style="gap: 10px;">
+                <div class="stack" style="gap: 4px;">
+                  <strong>{{ previewEntry?.relativePath || t("skills.noFileSelected") }}</strong>
+                  <div class="row" style="flex-wrap: wrap; gap: 8px;">
+                    <span class="muted">
+                      {{
+                        previewEntry?.kind === "directory"
+                          ? t("skills.folderSelected")
+                          : previewEntry?.previewable
+                            ? t("skills.previewMode")
+                            : t("skills.fileBinary")
+                      }}
+                    </span>
+                    <span v-if="previewFileExtension" class="skills-inline-badge">{{ previewFileExtension }}</span>
+                    <span v-if="previewFileSizeLabel" class="skills-inline-badge">{{ previewFileSizeLabel }}</span>
+                  </div>
+                </div>
+
+                <div v-if="previewLoading" class="empty-state">
+                  <strong>{{ t("skills.loadingFileTitle") }}</strong>
+                  <span class="muted">{{ t("skills.loadingFileDescription") }}</span>
+                </div>
+                <div v-else-if="previewEntry?.kind === 'directory'" class="empty-state">
+                  <strong>{{ t("skills.folderSelectedTitle") }}</strong>
+                  <span class="muted">{{ t("skills.folderSelectedDescription") }}</span>
+                </div>
+                <div v-else-if="previewEntry?.kind === 'file' && !previewEntry.previewable" class="empty-state">
+                  <template v-if="previewAssetUrl">
+                    <div class="stack skills-asset-preview" style="gap: 12px;">
+                      <img :src="previewAssetUrl" :alt="previewEntry?.name || 'asset'" class="skills-asset-preview__image" />
+                      <div class="row" style="flex-wrap: wrap; gap: 8px;">
+                        <span class="skills-inline-badge">{{ t("skills.assetImage") }}</span>
+                        <span v-if="previewFileSizeLabel" class="skills-inline-badge">{{ previewFileSizeLabel }}</span>
+                      </div>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <strong>{{ t("skills.binaryFileTitle") }}</strong>
+                    <span class="muted">{{ t("skills.binaryFileDescription") }}</span>
+                  </template>
+                </div>
+                <pre v-else class="code-block skills-editor-preview">{{ previewContent || activeSkillDetail.markdownContent }}</pre>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </section>

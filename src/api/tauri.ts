@@ -744,6 +744,7 @@ export interface SkillDetailRecord {
   directory_path: string;
   manifest_path: string;
   source_path: string | null;
+  file_tree: SkillFileEntryRecord[];
 }
 
 export interface SkillDraft {
@@ -755,6 +756,33 @@ export interface SkillDraft {
   tags_json: string;
   markdown_content: string;
   enabled: boolean;
+}
+
+export interface SkillFileEntryRecord {
+  name: string;
+  relative_path: string;
+  kind: string;
+  editable: boolean;
+  previewable: boolean;
+  size_bytes: number | null;
+  children: SkillFileEntryRecord[];
+}
+
+export interface SkillFileContentRecord {
+  relative_path: string;
+  content: string;
+  editable: boolean;
+  previewable: boolean;
+}
+
+export interface SkillEntryDraft {
+  parent_path: string;
+  name: string;
+  entry_kind: string;
+}
+
+export interface SkillAssetImportReport {
+  imported_paths: string[];
 }
 
 export interface SkillExportReport {
@@ -788,6 +816,35 @@ export function getSkillDetail(skillId: string) {
   });
 }
 
+export function getSkillFileContent(skillId: string, relativePath: string) {
+  return invoke<SkillFileContentRecord>("get_skill_file_content", {
+    skillId,
+    relativePath
+  });
+}
+
+export function saveSkillFileContent(skillId: string, relativePath: string, content: string) {
+  return invoke<SkillFileContentRecord>("save_skill_file_content", {
+    skillId,
+    relativePath,
+    content
+  });
+}
+
+export function createSkillEntry(skillId: string, draft: SkillEntryDraft) {
+  return invoke<SkillDetailRecord>("create_skill_entry", {
+    skillId,
+    draft
+  });
+}
+
+export function deleteSkillEntry(skillId: string, relativePath: string) {
+  return invoke<SkillDetailRecord>("delete_skill_entry", {
+    skillId,
+    relativePath
+  });
+}
+
 export function installSkillTemplate(templateId: string) {
   return invoke<SkillRecord>("install_skill_template", {
     templateId
@@ -812,6 +869,12 @@ export function refreshSkill(skillId: string) {
 
 export function exportSkill(skillId: string) {
   return invoke<SkillExportReport | null>("export_skill", {
+    skillId
+  });
+}
+
+export function importSkillAssets(skillId: string) {
+  return invoke<SkillAssetImportReport | null>("import_skill_assets", {
     skillId
   });
 }

@@ -2,7 +2,8 @@ use tauri::{AppHandle, State};
 
 use crate::{
     models::skill::{
-        SkillDetailRecord, SkillDraft, SkillExportReport, SkillRecord, SkillTemplateRecord,
+        SkillAssetImportReport, SkillDetailRecord, SkillDraft, SkillEntryDraft, SkillExportReport,
+        SkillFileContentRecord, SkillRecord, SkillTemplateRecord,
     },
     services,
     state::AppState,
@@ -41,6 +42,43 @@ pub fn get_skill_detail(
 }
 
 #[tauri::command]
+pub fn get_skill_file_content(
+    state: State<'_, AppState>,
+    skill_id: String,
+    relative_path: String,
+) -> Result<SkillFileContentRecord, String> {
+    services::skill::get_skill_file_content(state.inner(), &skill_id, &relative_path)
+}
+
+#[tauri::command]
+pub fn save_skill_file_content(
+    state: State<'_, AppState>,
+    skill_id: String,
+    relative_path: String,
+    content: String,
+) -> Result<SkillFileContentRecord, String> {
+    services::skill::save_skill_file_content(state.inner(), &skill_id, &relative_path, &content)
+}
+
+#[tauri::command]
+pub fn create_skill_entry(
+    state: State<'_, AppState>,
+    skill_id: String,
+    draft: SkillEntryDraft,
+) -> Result<SkillDetailRecord, String> {
+    services::skill::create_skill_entry(state.inner(), &skill_id, &draft)
+}
+
+#[tauri::command]
+pub fn delete_skill_entry(
+    state: State<'_, AppState>,
+    skill_id: String,
+    relative_path: String,
+) -> Result<SkillDetailRecord, String> {
+    services::skill::delete_skill_entry(state.inner(), &skill_id, &relative_path)
+}
+
+#[tauri::command]
 pub fn install_skill_template(
     state: State<'_, AppState>,
     template_id: String,
@@ -76,6 +114,15 @@ pub async fn export_skill(
     skill_id: String,
 ) -> Result<Option<SkillExportReport>, String> {
     services::skill::export_skill(&app, state.inner(), &skill_id)
+}
+
+#[tauri::command]
+pub async fn import_skill_assets(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    skill_id: String,
+) -> Result<Option<SkillAssetImportReport>, String> {
+    services::skill::import_skill_assets(&app, state.inner(), &skill_id)
 }
 
 #[tauri::command]

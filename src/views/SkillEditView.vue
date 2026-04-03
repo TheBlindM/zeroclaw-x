@@ -1,18 +1,114 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
+import SkillFileTree from "@/components/skills/SkillFileTree.vue";
 import Button from "@/components/ui/Button.vue";
-import { parseTags, useSkillStore } from "@/stores/skill";
+import { parseTags, useSkillStore, type SkillFileEntryItem } from "@/stores/skill";
+
+const PROTECTED_CREATE_ROOT_PATHS = new Set(["SKILL.md", "SKILL.toml", "scripts", "references", "assets"]);
 
 const skillStore = useSkillStore();
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
-const feedback = ref("");
-const ready = ref(false);
 
+const feedback = ref("");
+const fileFeedback = ref("");
+const ready = ref(false);
+const fileLoading = ref(false);
+const createEntryMode = ref<"file" | "directory" | null>(null);
+const selectedPath = ref("SKILL.md");
+const editorContent = ref("");
+const fileDirty = ref(false);
+const selectedEntry = ref<SkillFileEntryItem | null>(null);
+const draftFileTree = ref<SkillFileEntryItem[]>([]);
+const draftFileContents = ref<Record<string, string>>({});
+const draftMarkdownTouched = ref(false);
+const createEntryForm = reactive({
+  path: ""
+});
+
+const isCreateMode = computed(() => route.name === "skills-create");
 const skillId = computed(() => String(route.params.skillId ?? ""));
+const activeDetail = computed(() => skillStore.activeSkillDetail);
+const currentFileTree = computed(() => (isCreateMode.value ? draftFileTree.value : activeDetail.value?.fileTree ?? []));
+const currentDirectoryPath = computed(() => (isCreateMode.value ? "" : activeDetail.value?.directoryPath ?? ""));
+const primaryActionLabel = computed(() => (isCreateMode.value ? t("skills.createSkill") : t("skills.saveMetadata")));
+const modeTitle = computed(() => (isCreateMode.value ? t("skills.createTitle") : t("skills.editTitle")));
+const modeDescription = computed(() => (isCreateMode.value ? t("skills.createUnifiedDescription") : t("skills.editDescription")));
+const canDeleteSelected = computed(() => {
+  if (!selectedEntry.value) {
+    return false;
+  }
+
+  if (isCreateMode.value) {
+    return !PROTECTED_CREATE_ROOT_PATHS.has(selectedEntry.value.relativePath);
+  }
+
+  return selectedEntry.value.relativePath !== "SKILL.md" && selectedEntry.value.relativePath !== "SKILL.toml";
+});
+const metadataPreview = computed(() =>
+  [
+    "[skill]",
+    `name = "${form.name.trim() || "Skill"}"`,
+    `description = "${form.description.trim() || ""}"`,
+    `version = "${form.version.trim() || "0.1.0"}"`,
+    form.author.trim() ? `author = "${form.author.trim()}"` : "",
+    `tags = [${splitTags(form.tags)
+      .map((tag) => `"${tag}"`)
+      .join(", ")}]`
+  ]
+    .filter(Boolean)
+    .join("\n")
+);
+const selectedDirectory = computed(() => {
+  if (!selectedEntry.value) {
+    return "";
+  }
+
+  if (selectedEntry.value.kind === "directory") {
+    return selectedEntry.value.relativePath;
+  }
+
+  const segments = selectedEntry.value.relativePath.split("/");
+  segments.pop();
+  return segments.join("/");
+});
+const selectedFileExtension = computed(() => {
+  const path = selectedEntry.value?.relativePath ?? "";
+  const lastDot = path.lastIndexOf(".");
+  return lastDot >= 0 ? path.slice(lastDot + 1).toLowerCase() : "";
+});
+const selectedFileSizeLabel = computed(() => formatSize(selectedEntry.value?.sizeBytes));
+const selectedFileStatusLabel = computed(() => {
+  if (selectedEntry.value?.kind === "directory") {
+    return t("skills.folderSelected");
+  }
+  if (selectedEntry.value?.editable) {
+    return t("skills.fileEditable");
+  }
+  if (selectedEntry.value?.previewable) {
+    return t("skills.fileReadOnly");
+  }
+  return t("skills.fileBinary");
+});
+const selectedAssetUrl = computed(() => {
+  if (
+    isCreateMode.value ||
+    !currentDirectoryPath.value ||
+    !selectedEntry.value ||
+    selectedEntry.value.kind !== "file" ||
+    selectedEntry.value.previewable ||
+    !isImagePath(selectedEntry.value.relativePath)
+  ) {
+    return "";
+  }
+
+  return convertFileSrc(joinSkillPath(currentDirectoryPath.value, selectedEntry.value.relativePath));
+});
+
 const form = reactive({
   name: "",
   slug: "",
@@ -20,7 +116,6 @@ const form = reactive({
   version: "0.1.0",
   author: "",
   tags: "",
-  markdownContent: "",
   enabled: true
 });
 
@@ -31,31 +126,475 @@ function splitTags(value: string) {
     .filter(Boolean);
 }
 
-async function loadSkill() {
+function normalizeMarkdownContent(markdown: string) {
+  const trimmed = markdown.trim();
+  return trimmed ? `${trimmed}\n` : "";
+}
+
+function buildDefaultMarkdown() {
+  const title = `# ${form.name.trim() || "New Skill"}`;
+  const description = form.description.trim();
+  return normalizeMarkdownContent([title, description].filter(Boolean).join("\n\n"));
+}
+
+function formatSize(size?: number | null) {
+  if (typeof size !== "number") {
+    return "";
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function joinSkillPath(root: string, relativePath: string) {
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]+$/, "")}${separator}${relativePath.split("/").join(separator)}`;
+}
+
+function isImagePath(relativePath: string) {
+  return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].some((extension) =>
+    relativePath.toLowerCase().endsWith(extension)
+  );
+}
+
+function isPreviewableTextPath(relativePath: string) {
+  const normalized = relativePath.toLowerCase();
+  return (
+    normalized === "skill.md" ||
+    normalized === "skill.toml" ||
+    [
+      ".md",
+      ".markdown",
+      ".txt",
+      ".json",
+      ".toml",
+      ".yaml",
+      ".yml",
+      ".rs",
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      ".vue",
+      ".py",
+      ".sh",
+      ".bash",
+      ".zsh",
+      ".css",
+      ".html"
+    ].some((extension) => normalized.endsWith(extension))
+  );
+}
+
+function isEditableTextPath(relativePath: string) {
+  return relativePath !== "SKILL.toml" && isPreviewableTextPath(relativePath);
+}
+
+function skillEntryOrder(relativePath: string, kind: SkillFileEntryItem["kind"]) {
+  const rootName = relativePath.split("/")[0] ?? relativePath;
+  const bucket = rootName === "SKILL.md"
+    ? 0
+    : rootName === "SKILL.toml"
+      ? 1
+      : rootName === "scripts"
+        ? 2
+        : rootName === "references"
+          ? 3
+          : rootName === "assets"
+            ? 4
+            : rootName === "agents"
+              ? 5
+              : 6;
+  return [bucket, kind === "directory" ? 0 : 1] as const;
+}
+
+function cloneSkillFileEntry(entry: SkillFileEntryItem): SkillFileEntryItem {
+  return {
+    ...entry,
+    children: entry.children.map(cloneSkillFileEntry)
+  };
+}
+
+function sortSkillFileEntries(entries: SkillFileEntryItem[]) {
+  entries.sort((left, right) => {
+    const [leftBucket, leftKind] = skillEntryOrder(left.relativePath, left.kind);
+    const [rightBucket, rightKind] = skillEntryOrder(right.relativePath, right.kind);
+    return leftBucket - rightBucket || leftKind - rightKind || left.name.localeCompare(right.name);
+  });
+
+  for (const entry of entries) {
+    if (entry.kind === "directory") {
+      sortSkillFileEntries(entry.children);
+    }
+  }
+}
+
+function makeDraftDirectory(relativePath: string): SkillFileEntryItem {
+  const segments = relativePath.split("/");
+  return {
+    name: segments[segments.length - 1] ?? relativePath,
+    relativePath,
+    kind: "directory",
+    editable: false,
+    previewable: false,
+    sizeBytes: null,
+    children: []
+  };
+}
+
+function makeDraftFile(relativePath: string, content = ""): SkillFileEntryItem {
+  const segments = relativePath.split("/");
+  const previewable = isPreviewableTextPath(relativePath);
+  const editable = isEditableTextPath(relativePath);
+  return {
+    name: segments[segments.length - 1] ?? relativePath,
+    relativePath,
+    kind: "file",
+    editable,
+    previewable,
+    sizeBytes: previewable ? content.length : null,
+    children: []
+  };
+}
+
+function findFileEntry(entries: SkillFileEntryItem[], relativePath: string): SkillFileEntryItem | null {
+  for (const entry of entries) {
+    if (entry.relativePath === relativePath) {
+      return entry;
+    }
+
+    const nested = findFileEntry(entry.children, relativePath);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+function findFirstPreviewable(entries: SkillFileEntryItem[]): SkillFileEntryItem | null {
+  for (const entry of entries) {
+    if (entry.kind === "file" && entry.previewable) {
+      return entry;
+    }
+
+    const nested = findFirstPreviewable(entry.children);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+function createDefaultDraftTree() {
+  return [
+    makeDraftFile("SKILL.md", buildDefaultMarkdown()),
+    makeDraftFile("SKILL.toml", metadataPreview.value),
+    makeDraftDirectory("scripts"),
+    makeDraftDirectory("references"),
+    makeDraftDirectory("assets")
+  ];
+}
+
+function updateDraftFileSize(relativePath: string, sizeBytes: number | null) {
+  const nextTree = draftFileTree.value.map(cloneSkillFileEntry);
+  const entry = findFileEntry(nextTree, relativePath);
+  if (entry && entry.kind === "file") {
+    entry.sizeBytes = sizeBytes;
+    draftFileTree.value = nextTree;
+  }
+}
+
+function setDraftFileContent(relativePath: string, content: string) {
+  draftFileContents.value = {
+    ...draftFileContents.value,
+    [relativePath]: content
+  };
+  updateDraftFileSize(relativePath, content.length);
+}
+
+function syncFormFromDetail() {
+  if (!activeDetail.value) {
+    return;
+  }
+
+  form.name = activeDetail.value.skill.name;
+  form.slug = activeDetail.value.skill.slug;
+  form.description = activeDetail.value.skill.description;
+  form.version = activeDetail.value.skill.version;
+  form.author = activeDetail.value.skill.author;
+  form.tags = parseTags(activeDetail.value.skill.tagsJson).join(", ");
+  form.enabled = activeDetail.value.skill.enabled;
+}
+
+function initializeCreateMode() {
   ready.value = false;
   feedback.value = "";
+  fileFeedback.value = "";
+  fileDirty.value = false;
+  fileLoading.value = false;
+  draftMarkdownTouched.value = false;
+
+  form.name = "";
+  form.slug = "";
+  form.description = "";
+  form.version = "0.1.0";
+  form.author = "";
+  form.tags = "";
+  form.enabled = true;
+
+  const markdown = buildDefaultMarkdown();
+  draftFileContents.value = {
+    "SKILL.md": markdown
+  };
+  draftFileTree.value = createDefaultDraftTree();
+  selectedPath.value = "SKILL.md";
+  selectedEntry.value = findFileEntry(draftFileTree.value, "SKILL.md");
+  editorContent.value = markdown;
+  ready.value = true;
+}
+
+async function loadExistingSkill() {
+  ready.value = false;
+  feedback.value = "";
+  fileFeedback.value = "";
+  fileDirty.value = false;
+  fileLoading.value = false;
 
   try {
     if (!skillStore.loaded) {
       await skillStore.bootstrap();
     }
 
-    const detail = await skillStore.loadSkillDetail(skillId.value);
-    form.name = detail.skill.name;
-    form.slug = detail.skill.slug;
-    form.description = detail.skill.description;
-    form.version = detail.skill.version;
-    form.author = detail.skill.author;
-    form.tags = parseTags(detail.skill.tagsJson).join(", ");
-    form.markdownContent = detail.markdownContent;
-    form.enabled = detail.skill.enabled;
+    await skillStore.loadSkillDetail(skillId.value, true);
+    syncFormFromDetail();
+    const firstPreviewable = findFirstPreviewable(activeDetail.value?.fileTree ?? []);
+    await openFile(firstPreviewable?.relativePath ?? "SKILL.md", { force: true });
     ready.value = true;
   } catch {
     feedback.value = t("skills.feedback.loadDetailFailed");
   }
 }
 
-async function handleSubmit() {
+async function openFile(relativePath: string, options?: { force?: boolean }) {
+  const force = options?.force ?? false;
+  const nextEntry = findFileEntry(currentFileTree.value, relativePath);
+  if (!nextEntry) {
+    return;
+  }
+
+  if (!force && fileDirty.value && relativePath !== selectedPath.value) {
+    const confirmed = window.confirm(t("skills.prompts.discardFileChanges"));
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  selectedPath.value = relativePath;
+  selectedEntry.value = nextEntry;
+  fileFeedback.value = "";
+  fileDirty.value = false;
+
+  if (nextEntry.kind === "directory") {
+    editorContent.value = "";
+    return;
+  }
+
+  if (isCreateMode.value) {
+    editorContent.value =
+      relativePath === "SKILL.toml" ? metadataPreview.value : (draftFileContents.value[relativePath] ?? "");
+    return;
+  }
+
+  if (!nextEntry.previewable) {
+    editorContent.value = "";
+    return;
+  }
+
+  fileLoading.value = true;
+
+  try {
+    const file = await skillStore.loadSkillFileContent(skillId.value, relativePath);
+    editorContent.value = file.content;
+  } catch {
+    fileFeedback.value = t("skills.feedback.loadFileFailed");
+  } finally {
+    fileLoading.value = false;
+  }
+}
+
+function parsePromptPath(value: string) {
+  const trimmed = value.trim().replace(/^\/+|\/+$/g, "");
+  if (!trimmed) {
+    return null;
+  }
+
+  const parts = trimmed.split("/").filter(Boolean);
+  const name = parts.pop() ?? "";
+  return {
+    parentPath: parts.join("/"),
+    name
+  };
+}
+
+function addDraftEntry(parentPath: string, name: string, entryKind: "file" | "directory") {
+  const relativePath = parentPath ? `${parentPath}/${name}` : name;
+  const nextTree = draftFileTree.value.map(cloneSkillFileEntry);
+  const parent = parentPath ? findFileEntry(nextTree, parentPath) : null;
+
+  if (parentPath && (!parent || parent.kind !== "directory")) {
+    throw new Error("parent missing");
+  }
+
+  const collection = parentPath && parent?.kind === "directory" ? parent.children : nextTree;
+  if (collection.some((entry) => entry.relativePath === relativePath)) {
+    throw new Error("duplicate entry");
+  }
+
+  if (entryKind === "directory") {
+    collection.push(makeDraftDirectory(relativePath));
+  } else {
+    const initialContent = isPreviewableTextPath(relativePath) ? "" : "";
+    collection.push(makeDraftFile(relativePath, initialContent));
+    if (isPreviewableTextPath(relativePath) && relativePath !== "SKILL.toml") {
+      setDraftFileContent(relativePath, initialContent);
+    }
+  }
+
+  sortSkillFileEntries(nextTree);
+  draftFileTree.value = nextTree;
+}
+
+function removeDraftEntry(relativePath: string) {
+  const removeRecursively = (entries: SkillFileEntryItem[]): SkillFileEntryItem[] =>
+    entries
+      .filter((entry) => entry.relativePath !== relativePath)
+      .map((entry) => ({
+        ...entry,
+        children: entry.kind === "directory" ? removeRecursively(entry.children) : entry.children
+      }));
+
+  const nextTree = removeRecursively(draftFileTree.value);
+  const nextContents = { ...draftFileContents.value };
+
+  for (const path of Object.keys(nextContents)) {
+    if (path === relativePath || path.startsWith(`${relativePath}/`)) {
+      delete nextContents[path];
+    }
+  }
+
+  draftFileTree.value = nextTree;
+  draftFileContents.value = nextContents;
+}
+
+function collectDraftEntries(entries: SkillFileEntryItem[]) {
+  const directories: Array<{ parentPath: string; name: string }> = [];
+  const files: Array<{ parentPath: string; name: string; relativePath: string; content: string }> = [];
+
+  const visit = (nodeEntries: SkillFileEntryItem[]) => {
+    for (const entry of nodeEntries) {
+      if (entry.kind === "directory") {
+        if (!PROTECTED_CREATE_ROOT_PATHS.has(entry.relativePath)) {
+          const segments = entry.relativePath.split("/");
+          const name = segments.pop() ?? entry.relativePath;
+          directories.push({
+            parentPath: segments.join("/"),
+            name
+          });
+        }
+        visit(entry.children);
+      } else if (entry.relativePath !== "SKILL.md" && entry.relativePath !== "SKILL.toml") {
+        const segments = entry.relativePath.split("/");
+        const name = segments.pop() ?? entry.relativePath;
+        files.push({
+          parentPath: segments.join("/"),
+          name,
+          relativePath: entry.relativePath,
+          content: draftFileContents.value[entry.relativePath] ?? ""
+        });
+      }
+    }
+  };
+
+  visit(entries);
+
+  directories.sort((left, right) => left.parentPath.split("/").filter(Boolean).length - right.parentPath.split("/").filter(Boolean).length);
+  files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+
+  return { directories, files };
+}
+
+async function persistDraftSelectedFile() {
+  if (!selectedEntry.value || selectedEntry.value.kind !== "file" || !selectedEntry.value.editable) {
+    return;
+  }
+
+  const content = selectedEntry.value.relativePath === "SKILL.md"
+    ? normalizeMarkdownContent(editorContent.value)
+    : editorContent.value;
+
+  setDraftFileContent(selectedEntry.value.relativePath, content);
+  if (selectedEntry.value.relativePath === "SKILL.md") {
+    draftMarkdownTouched.value = true;
+  }
+  editorContent.value = content;
+  fileDirty.value = false;
+}
+
+async function handleCreateSkillPackage() {
+  feedback.value = "";
+  fileFeedback.value = "";
+
+  try {
+    if (fileDirty.value) {
+      await persistDraftSelectedFile();
+    }
+
+    const created = await skillStore.createSkill({
+      slug: form.slug.trim(),
+      name: form.name.trim(),
+      description: form.description.trim(),
+      version: form.version.trim(),
+      author: form.author.trim(),
+      tags_json: JSON.stringify(splitTags(form.tags)),
+      markdown_content: draftFileContents.value["SKILL.md"] ?? buildDefaultMarkdown(),
+      enabled: form.enabled
+    });
+
+    const draftEntries = collectDraftEntries(draftFileTree.value);
+
+    for (const directory of draftEntries.directories) {
+      await skillStore.createSkillEntry(created.id, {
+        parent_path: directory.parentPath,
+        name: directory.name,
+        entry_kind: "directory"
+      });
+    }
+
+    for (const file of draftEntries.files) {
+      await skillStore.createSkillEntry(created.id, {
+        parent_path: file.parentPath,
+        name: file.name,
+        entry_kind: "file"
+      });
+
+      if (isEditableTextPath(file.relativePath)) {
+        await skillStore.saveSkillFileContent(created.id, file.relativePath, file.content);
+      }
+    }
+
+    await router.replace(`/skills/${created.id}/edit`);
+  } catch {
+    feedback.value = t("skills.feedback.createFailed");
+  }
+}
+
+async function handleSaveMetadata() {
   feedback.value = "";
 
   try {
@@ -66,24 +605,214 @@ async function handleSubmit() {
       version: form.version.trim(),
       author: form.author.trim(),
       tags_json: JSON.stringify(splitTags(form.tags)),
-      markdown_content: form.markdownContent,
+      markdown_content:
+        selectedPath.value === "SKILL.md" && selectedEntry.value?.kind === "file" ? editorContent.value : activeDetail.value?.markdownContent ?? "",
       enabled: form.enabled
     });
-    router.push("/skills");
+    await skillStore.loadSkillDetail(skillId.value, true);
+    syncFormFromDetail();
+    feedback.value = t("skills.feedback.updated", { name: form.name.trim() });
   } catch {
     feedback.value = t("skills.feedback.updateFailed");
   }
 }
 
-watch(skillId, async () => {
-  if (skillId.value) {
-    await loadSkill();
+async function handlePrimaryAction() {
+  if (isCreateMode.value) {
+    await handleCreateSkillPackage();
+  } else {
+    await handleSaveMetadata();
   }
-});
+}
 
-onMounted(async () => {
-  if (skillId.value) {
-    await loadSkill();
+async function handleSaveFile() {
+  if (!selectedEntry.value || selectedEntry.value.kind !== "file" || !selectedEntry.value.editable) {
+    return;
+  }
+
+  fileFeedback.value = "";
+
+  try {
+    if (isCreateMode.value) {
+      await persistDraftSelectedFile();
+      fileFeedback.value = t("skills.feedback.fileSaved", { path: selectedEntry.value.relativePath });
+      return;
+    }
+
+    const saved = await skillStore.saveSkillFileContent(skillId.value, selectedEntry.value.relativePath, editorContent.value);
+    editorContent.value = saved.content;
+    fileDirty.value = false;
+    await skillStore.loadSkillDetail(skillId.value, true);
+    selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], saved.relativePath);
+    fileFeedback.value = t("skills.feedback.fileSaved", { path: saved.relativePath });
+  } catch {
+    fileFeedback.value = t("skills.feedback.fileSaveFailed");
+  }
+}
+
+function startCreateEntry(entryKind: "file" | "directory") {
+  createEntryMode.value = entryKind;
+  createEntryForm.path = selectedDirectory.value ? `${selectedDirectory.value}/` : "";
+  fileFeedback.value = "";
+}
+
+function cancelCreateEntry() {
+  createEntryMode.value = null;
+  createEntryForm.path = "";
+}
+
+async function submitCreateEntry() {
+  if (!createEntryMode.value) {
+    return;
+  }
+
+  const parsed = parsePromptPath(createEntryForm.path);
+  if (!parsed?.name) {
+    fileFeedback.value = t("skills.feedback.createEntryFailed");
+    return;
+  }
+
+  fileFeedback.value = "";
+
+  try {
+    if (isCreateMode.value) {
+      addDraftEntry(parsed.parentPath, parsed.name, createEntryMode.value);
+      if (createEntryMode.value === "file") {
+        const relativePath = parsed.parentPath ? `${parsed.parentPath}/${parsed.name}` : parsed.name;
+        await openFile(relativePath, { force: true });
+      } else {
+        selectedEntry.value = findFileEntry(draftFileTree.value, parsed.parentPath ? `${parsed.parentPath}/${parsed.name}` : parsed.name);
+      }
+      fileFeedback.value = t("skills.feedback.entryCreated", { name: parsed.name });
+      cancelCreateEntry();
+      return;
+    }
+
+    await skillStore.createSkillEntry(skillId.value, {
+      parent_path: parsed.parentPath,
+      name: parsed.name,
+      entry_kind: createEntryMode.value
+    });
+    if (createEntryMode.value === "file") {
+      const relativePath = parsed.parentPath ? `${parsed.parentPath}/${parsed.name}` : parsed.name;
+      await openFile(relativePath, { force: true });
+    } else {
+      selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], parsed.parentPath ? `${parsed.parentPath}/${parsed.name}` : parsed.name);
+    }
+    fileFeedback.value = t("skills.feedback.entryCreated", { name: parsed.name });
+    cancelCreateEntry();
+  } catch {
+    fileFeedback.value = t("skills.feedback.createEntryFailed");
+  }
+}
+
+async function handleDeleteSelected() {
+  if (!selectedEntry.value) {
+    return;
+  }
+
+  const confirmed = window.confirm(t("skills.prompts.deleteEntry", { path: selectedEntry.value.relativePath }));
+  if (!confirmed) {
+    return;
+  }
+
+  const deletedPath = selectedEntry.value.relativePath;
+  fileFeedback.value = "";
+
+  try {
+    if (isCreateMode.value) {
+      removeDraftEntry(deletedPath);
+      const fallback = findFirstPreviewable(draftFileTree.value);
+      if (fallback) {
+        await openFile(fallback.relativePath, { force: true });
+      } else {
+        selectedPath.value = "";
+        selectedEntry.value = null;
+        editorContent.value = "";
+      }
+      fileFeedback.value = t("skills.feedback.entryDeleted", { path: deletedPath });
+      return;
+    }
+
+    const detail = await skillStore.deleteSkillEntry(skillId.value, deletedPath);
+    const fallback = findFirstPreviewable(detail.fileTree);
+    if (fallback) {
+      await openFile(fallback.relativePath, { force: true });
+    } else {
+      selectedPath.value = "";
+      selectedEntry.value = null;
+      editorContent.value = "";
+    }
+    fileFeedback.value = t("skills.feedback.entryDeleted", { path: deletedPath });
+  } catch {
+    fileFeedback.value = t("skills.feedback.deleteEntryFailed");
+  }
+}
+
+async function handleImportAssets() {
+  if (isCreateMode.value) {
+    fileFeedback.value = t("skills.feedback.importAssetsAfterCreate");
+    return;
+  }
+
+  fileFeedback.value = "";
+
+  try {
+    const report = await skillStore.importSkillAssets(skillId.value);
+    if (!report) {
+      return;
+    }
+
+    await skillStore.loadSkillDetail(skillId.value, true);
+    selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], report.imported_paths[0] ?? "assets");
+    if (report.imported_paths[0]) {
+      await openFile(report.imported_paths[0], { force: true });
+    }
+    fileFeedback.value = t("skills.feedback.assetsImported", { count: report.imported_paths.length });
+  } catch {
+    fileFeedback.value = t("skills.feedback.importAssetsFailed");
+  }
+}
+
+watch(
+  () => [isCreateMode.value, skillId.value],
+  async () => {
+    if (isCreateMode.value) {
+      initializeCreateMode();
+    } else if (skillId.value) {
+      await loadExistingSkill();
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => currentFileTree.value,
+  () => {
+    if (selectedPath.value) {
+      selectedEntry.value = findFileEntry(currentFileTree.value, selectedPath.value);
+    }
+  }
+);
+
+watch(
+  () => [form.name, form.description],
+  () => {
+    if (!isCreateMode.value || draftMarkdownTouched.value) {
+      return;
+    }
+
+    const markdown = buildDefaultMarkdown();
+    setDraftFileContent("SKILL.md", markdown);
+    if (selectedPath.value === "SKILL.md" && !fileDirty.value) {
+      editorContent.value = markdown;
+    }
+  }
+);
+
+watch(metadataPreview, (value) => {
+  if (isCreateMode.value && selectedPath.value === "SKILL.toml") {
+    editorContent.value = value;
   }
 });
 </script>
@@ -93,10 +822,15 @@ onMounted(async () => {
     <section class="panel" style="padding: 24px;">
       <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
         <div class="stack" style="gap: 6px; max-width: 760px;">
-          <strong>{{ t("skills.editTitle") }}</strong>
-          <span class="muted">{{ t("skills.editDescription") }}</span>
+          <strong>{{ modeTitle }}</strong>
+          <span class="muted">{{ modeDescription }}</span>
         </div>
-        <Button variant="secondary" @click="router.push('/skills')">{{ t("skills.cancelCreate") }}</Button>
+        <div class="row" style="flex-wrap: wrap;">
+          <Button variant="secondary" @click="router.push('/skills')">{{ t("skills.cancelCreate") }}</Button>
+          <Button :disabled="skillStore.isSaving" @click="handlePrimaryAction">
+            {{ skillStore.isSaving ? (isCreateMode ? t("skills.creating") : t("skills.saving")) : primaryActionLabel }}
+          </Button>
+        </div>
       </div>
     </section>
 
@@ -107,59 +841,166 @@ onMounted(async () => {
       </div>
     </section>
 
-    <section v-else class="panel" style="padding: 20px;">
-      <div class="stack" style="gap: 16px;">
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("skills.name") }}</span>
-          <input v-model="form.name" class="field" :placeholder="t('skills.namePlaceholder')" />
-        </label>
+    <template v-else>
+      <section class="panel" style="padding: 20px;">
+        <div class="stack" style="gap: 16px;">
+          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+            <div class="stack" style="gap: 6px;">
+              <strong>{{ form.name || t("skills.createSkill") }}</strong>
+              <span class="muted">{{ t("skills.metadataDescription") }}</span>
+            </div>
+          </div>
 
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("skills.slugInput") }}</span>
-          <input v-model="form.slug" class="field" disabled />
-          <span class="muted settings-field__hint">{{ t("skills.slugLockedHint") }}</span>
-        </label>
-
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("skills.descriptionInput") }}</span>
-          <input v-model="form.description" class="field" :placeholder="t('skills.descriptionPlaceholder')" />
-        </label>
-
-        <div class="row" style="align-items: flex-start; flex-wrap: wrap;">
-          <label class="settings-field" style="flex: 1 1 220px;">
-            <span class="settings-field__label">{{ t("skills.versionInput") }}</span>
-            <input v-model="form.version" class="field" :placeholder="t('skills.versionPlaceholder')" />
+          <label class="settings-field">
+            <span class="settings-field__label">{{ t("skills.name") }}</span>
+            <input v-model="form.name" class="field" :placeholder="t('skills.namePlaceholder')" />
           </label>
 
-          <label class="settings-field" style="flex: 1 1 220px;">
-            <span class="settings-field__label">{{ t("skills.authorInput") }}</span>
-            <input v-model="form.author" class="field" :placeholder="t('skills.authorPlaceholder')" />
+          <label class="settings-field">
+            <span class="settings-field__label">{{ t("skills.slugInput") }}</span>
+            <input v-model="form.slug" class="field" :placeholder="isCreateMode ? t('skills.slugPlaceholder') : undefined" :disabled="!isCreateMode" />
+            <span v-if="!isCreateMode" class="muted settings-field__hint">{{ t("skills.slugLockedHint") }}</span>
           </label>
-        </div>
 
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("skills.tagsInput") }}</span>
-          <input v-model="form.tags" class="field" :placeholder="t('skills.tagsPlaceholder')" />
-        </label>
+          <label class="settings-field">
+            <span class="settings-field__label">{{ t("skills.descriptionInput") }}</span>
+            <input v-model="form.description" class="field" :placeholder="t('skills.descriptionPlaceholder')" />
+          </label>
 
-        <label class="settings-field">
-          <span class="settings-field__label">{{ t("skills.markdownInput") }}</span>
-          <textarea v-model="form.markdownContent" class="textarea" :placeholder="t('skills.markdownPlaceholder')" />
-        </label>
+          <div class="row" style="align-items: flex-start; flex-wrap: wrap;">
+            <label class="settings-field" style="flex: 1 1 220px;">
+              <span class="settings-field__label">{{ t("skills.versionInput") }}</span>
+              <input v-model="form.version" class="field" :placeholder="t('skills.versionPlaceholder')" />
+            </label>
 
-        <label class="projects-checkbox">
-          <input v-model="form.enabled" type="checkbox" />
-          <span>{{ t("skills.enabledToggleCreate") }}</span>
-        </label>
+            <label class="settings-field" style="flex: 1 1 220px;">
+              <span class="settings-field__label">{{ t("skills.authorInput") }}</span>
+              <input v-model="form.author" class="field" :placeholder="t('skills.authorPlaceholder')" />
+            </label>
+          </div>
 
-        <div class="row" style="justify-content: flex-end; flex-wrap: wrap;">
+          <label class="settings-field">
+            <span class="settings-field__label">{{ t("skills.tagsInput") }}</span>
+            <input v-model="form.tags" class="field" :placeholder="t('skills.tagsPlaceholder')" />
+          </label>
+
+          <label class="projects-checkbox">
+            <input v-model="form.enabled" type="checkbox" />
+            <span>{{ t("skills.enabledToggleCreate") }}</span>
+          </label>
+
           <span v-if="feedback || skillStore.error" class="settings-error">{{ feedback || skillStore.error }}</span>
-          <Button variant="secondary" @click="router.push('/skills')">{{ t("skills.cancelCreate") }}</Button>
-          <Button :disabled="skillStore.isSaving" @click="handleSubmit">
-            {{ skillStore.isSaving ? t("skills.saving") : t("skills.saveSkill") }}
-          </Button>
+
+          <div class="stack" style="gap: 8px;">
+            <span class="settings-field__label">{{ t("skills.manifestPreview") }}</span>
+            <span class="muted">{{ t("skills.manifestPreviewHint") }}</span>
+            <pre class="code-block skills-editor-preview">{{ metadataPreview }}</pre>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      <section class="panel" style="padding: 20px;">
+        <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+          <div class="stack" style="gap: 6px;">
+            <strong>{{ t("skills.filesTitle") }}</strong>
+            <span class="muted">{{ isCreateMode ? t("skills.filesDescriptionCreate") : t("skills.filesDescription") }}</span>
+          </div>
+          <div class="row" style="flex-wrap: wrap;">
+            <Button variant="ghost" :disabled="skillStore.isSaving" @click="startCreateEntry('file')">{{ t("skills.newFile") }}</Button>
+            <Button variant="ghost" :disabled="skillStore.isSaving" @click="startCreateEntry('directory')">{{ t("skills.newFolder") }}</Button>
+            <Button variant="ghost" :disabled="skillStore.isImporting" @click="handleImportAssets">{{ t("skills.importAssets") }}</Button>
+            <Button variant="ghost" :disabled="skillStore.isSaving || !canDeleteSelected" @click="handleDeleteSelected">
+              {{ t("skills.deleteSelected") }}
+            </Button>
+          </div>
+        </div>
+
+        <div v-if="createEntryMode" class="skills-inline-create">
+          <div class="stack" style="gap: 8px; flex: 1 1 320px;">
+            <span class="settings-field__label">
+              {{ createEntryMode === "file" ? t("skills.inlineCreateFile") : t("skills.inlineCreateFolder") }}
+            </span>
+            <input
+              v-model="createEntryForm.path"
+              class="field"
+              :placeholder="createEntryMode === 'file' ? t('skills.inlineCreateFilePlaceholder') : t('skills.inlineCreateFolderPlaceholder')"
+              @keydown.enter.prevent="submitCreateEntry"
+              @keydown.esc.prevent="cancelCreateEntry"
+            />
+            <span class="muted">{{ t("skills.inlineCreateHint") }}</span>
+          </div>
+          <div class="row" style="flex-wrap: wrap; align-items: flex-end;">
+            <Button variant="secondary" @click="cancelCreateEntry">{{ t("skills.cancelCreateEntry") }}</Button>
+            <Button :disabled="skillStore.isSaving" @click="submitCreateEntry">{{ t("skills.confirmCreateEntry") }}</Button>
+          </div>
+        </div>
+
+        <div class="skills-editor-layout">
+          <div class="skills-editor-layout__sidebar">
+            <SkillFileTree :entries="currentFileTree" :selected-path="selectedPath" @select="openFile" />
+          </div>
+
+          <div class="skills-editor-layout__main">
+            <div class="stack" style="gap: 10px;">
+              <div class="row" style="justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <div class="stack" style="gap: 4px;">
+                  <strong>{{ selectedEntry?.relativePath || t("skills.noFileSelected") }}</strong>
+                  <div class="row" style="flex-wrap: wrap; gap: 8px;">
+                    <span class="muted">{{ selectedFileStatusLabel }}</span>
+                    <span v-if="selectedFileExtension" class="skills-inline-badge">{{ selectedFileExtension }}</span>
+                    <span v-if="selectedFileSizeLabel" class="skills-inline-badge">{{ selectedFileSizeLabel }}</span>
+                    <span v-if="fileDirty" class="skills-inline-badge skills-inline-badge--warn">{{ t("skills.unsavedChanges") }}</span>
+                  </div>
+                </div>
+                <Button
+                  v-if="selectedEntry?.kind === 'file' && selectedEntry.editable"
+                  :disabled="skillStore.isSaving || !fileDirty"
+                  @click="handleSaveFile"
+                >
+                  {{ skillStore.isSaving ? t("skills.saving") : t("skills.saveFile") }}
+                </Button>
+              </div>
+
+              <div v-if="fileLoading" class="empty-state">
+                <strong>{{ t("skills.loadingFileTitle") }}</strong>
+                <span class="muted">{{ t("skills.loadingFileDescription") }}</span>
+              </div>
+
+              <div v-else-if="selectedEntry?.kind === 'directory'" class="empty-state">
+                <strong>{{ t("skills.folderSelectedTitle") }}</strong>
+                <span class="muted">{{ t("skills.folderSelectedDescription") }}</span>
+              </div>
+
+              <div v-else-if="selectedEntry?.kind === 'file' && !selectedEntry.previewable" class="empty-state">
+                <template v-if="selectedAssetUrl">
+                  <div class="stack skills-asset-preview" style="gap: 12px;">
+                    <img :src="selectedAssetUrl" :alt="selectedEntry?.name || 'asset'" class="skills-asset-preview__image" />
+                    <div class="row" style="flex-wrap: wrap; gap: 8px;">
+                      <span class="skills-inline-badge">{{ t("skills.assetImage") }}</span>
+                      <span v-if="selectedFileSizeLabel" class="skills-inline-badge">{{ selectedFileSizeLabel }}</span>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <strong>{{ t("skills.binaryFileTitle") }}</strong>
+                  <span class="muted">{{ isCreateMode ? t("skills.binaryFileDescriptionCreate") : t("skills.binaryFileDescription") }}</span>
+                </template>
+              </div>
+
+              <textarea
+                v-else-if="selectedEntry?.kind === 'file' && selectedEntry.editable"
+                v-model="editorContent"
+                class="textarea skills-editor"
+                @input="fileDirty = true"
+              />
+
+              <pre v-else class="code-block skills-editor-preview">{{ editorContent }}</pre>
+
+              <span v-if="fileFeedback || skillStore.error" class="settings-error">{{ fileFeedback || skillStore.error }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </template>
   </div>
 </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import Button from "@/components/ui/Button.vue";
@@ -38,6 +38,11 @@ function buildMarkdown() {
 
   return sections.filter((section) => section.length > 0).join("\n");
 }
+
+const scaffoldLines = computed(() => {
+  const slug = form.slug.trim() || form.name.trim().toLowerCase().replace(/\s+/g, "-") || "my-skill";
+  return [`${slug}/`, "  SKILL.md", "  SKILL.toml", "  scripts/", "  references/", "  assets/"];
+});
 
 async function handleSubmit() {
   feedback.value = "";
@@ -110,6 +115,12 @@ async function handleSubmit() {
           <span class="settings-field__label">{{ t("skills.instructionsInput") }}</span>
           <textarea v-model="form.instructions" class="textarea" :placeholder="t('skills.instructionsPlaceholder')" />
         </label>
+
+        <div class="stack" style="gap: 8px;">
+          <span class="settings-field__label">{{ t("skills.structurePreview") }}</span>
+          <span class="muted">{{ t("skills.structurePreviewHint") }}</span>
+          <pre class="code-block skills-markdown">{{ scaffoldLines.join("\n") }}</pre>
+        </div>
 
         <label class="projects-checkbox">
           <input v-model="form.enabled" type="checkbox" />
