@@ -30,6 +30,9 @@ pub struct SkillTemplateRecord {
 pub struct SkillDetailRecord {
     pub skill: SkillRecord,
     pub markdown_content: String,
+    pub directory_path: String,
+    pub manifest_path: String,
+    pub source_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,4 +45,9 @@ pub struct SkillDraft {
     pub tags_json: String,
     pub markdown_content: String,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillExportReport {
+    pub path: String,
 }

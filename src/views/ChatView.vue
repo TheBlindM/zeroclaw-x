@@ -9,7 +9,6 @@ import ChatComposer from "@/components/chat/ChatComposer.vue";
 import ChatMessageList from "@/components/chat/ChatMessageList.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import Button from "@/components/ui/Button.vue";
-import { useChatStream } from "@/composables/useChatStream";
 import { formatTimestamp } from "@/lib/datetime";
 import { useChatStore } from "@/stores/chat";
 import { useProjectsStore } from "@/stores/projects";
@@ -247,8 +246,6 @@ watch(
   },
   { immediate: true }
 );
-
-useChatStream();
 
 onMounted(async () => {
   window.addEventListener("keydown", handleWindowKeydown);
@@ -632,8 +629,46 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
             />
           </div>
 
-          <div class="chat-room__composer panel">
-            <ChatComposer :busy="isStreaming || isBootstrapping" @submit="handleSubmit" />
+          <div
+            class="chat-room__composer-stack"
+            :class="{ 'chat-room__composer-stack--approval': activePendingApprovals.length > 0 }"
+          >
+            <div v-if="activePendingApprovals.length > 0" class="panel approval-panel approval-panel--composer">
+              <div class="stack chat-panel__stack">
+                <div class="chat-panel__header row">
+                  <div class="stack chat-panel__copy">
+                    <span class="eyebrow">{{ t("chat.approvalEyebrow") }}</span>
+                    <strong>{{ t("chat.pendingCalls", { count: activePendingApprovals.length }) }}</strong>
+                    <span class="muted">{{ t("chat.approvalDescription") }}</span>
+                  </div>
+                  <span class="session-project-chip">{{ t("chat.waitingForYou") }}</span>
+                </div>
+                <span v-if="approvalFeedback" class="muted">{{ approvalFeedback }}</span>
+                <div class="approval-list">
+                  <article v-for="approval in activePendingApprovals" :key="approval.request_id" class="approval-card">
+                    <div class="stack chat-panel__card-stack">
+                      <div class="row chat-panel__card-header">
+                        <strong>{{ approval.tool_name }}</strong>
+                        <span class="approval-chip">
+                          <ShieldCheck :size="14" />
+                          {{ t("chat.approvalRequired") }}
+                        </span>
+                      </div>
+                      <p class="approval-card__summary">{{ approval.arguments_summary }}</p>
+                    </div>
+                    <div class="row approval-actions">
+                      <Button variant="ghost" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'no')">{{ t("chat.deny") }}</Button>
+                      <Button variant="secondary" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'yes')">{{ t("chat.approveOnce") }}</Button>
+                      <Button :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'always')">{{ t("chat.alwaysAllow") }}</Button>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </div>
+
+            <div class="chat-room__composer panel" :class="{ 'chat-room__composer--approval': activePendingApprovals.length > 0 }">
+              <ChatComposer :busy="isStreaming || isBootstrapping" @submit="handleSubmit" />
+            </div>
           </div>
         </div>
 
@@ -660,39 +695,6 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
                   <Bot :size="16" />
                   {{ activeAgentMode ? t("chat.agentEnabled") : t("chat.enableAgent") }}
                 </Button>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="activePendingApprovals.length > 0" class="panel approval-panel">
-            <div class="stack chat-panel__stack">
-              <div class="chat-panel__header row">
-                <div class="stack chat-panel__copy">
-                  <span class="eyebrow">{{ t("chat.approvalEyebrow") }}</span>
-                  <strong>{{ t("chat.pendingCalls", { count: activePendingApprovals.length }) }}</strong>
-                  <span class="muted">{{ t("chat.approvalDescription") }}</span>
-                </div>
-                <span class="session-project-chip">{{ t("chat.waitingForYou") }}</span>
-              </div>
-              <span v-if="approvalFeedback" class="muted">{{ approvalFeedback }}</span>
-              <div class="approval-list">
-                <article v-for="approval in activePendingApprovals" :key="approval.request_id" class="approval-card">
-                  <div class="stack chat-panel__card-stack">
-                    <div class="row chat-panel__card-header">
-                      <strong>{{ approval.tool_name }}</strong>
-                      <span class="approval-chip">
-                        <ShieldCheck :size="14" />
-                        {{ t("chat.approvalRequired") }}
-                      </span>
-                    </div>
-                    <p class="approval-card__summary">{{ approval.arguments_summary }}</p>
-                  </div>
-                  <div class="row approval-actions">
-                    <Button variant="ghost" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'no')">{{ t("chat.deny") }}</Button>
-                    <Button variant="secondary" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'yes')">{{ t("chat.approveOnce") }}</Button>
-                    <Button :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'always')">{{ t("chat.alwaysAllow") }}</Button>
-                  </div>
-                </article>
               </div>
             </div>
           </div>

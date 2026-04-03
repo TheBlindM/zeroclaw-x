@@ -741,6 +741,9 @@ export interface SkillTemplateRecord {
 export interface SkillDetailRecord {
   skill: SkillRecord;
   markdown_content: string;
+  directory_path: string;
+  manifest_path: string;
+  source_path: string | null;
 }
 
 export interface SkillDraft {
@@ -754,6 +757,10 @@ export interface SkillDraft {
   enabled: boolean;
 }
 
+export interface SkillExportReport {
+  path: string;
+}
+
 export function listSkillTemplates() {
   return invoke<SkillTemplateRecord[]>("list_skill_templates");
 }
@@ -764,6 +771,13 @@ export function listSkills() {
 
 export function createSkill(skill: SkillDraft) {
   return invoke<SkillRecord>("create_skill", {
+    skill
+  });
+}
+
+export function updateSkill(skillId: string, skill: SkillDraft) {
+  return invoke<SkillRecord>("update_skill", {
+    skillId,
     skill
   });
 }
@@ -782,6 +796,30 @@ export function installSkillTemplate(templateId: string) {
 
 export function importSkillDirectory() {
   return invoke<SkillRecord | null>("import_skill_directory");
+}
+
+export function duplicateSkill(skillId: string) {
+  return invoke<SkillRecord>("duplicate_skill", {
+    skillId
+  });
+}
+
+export function refreshSkill(skillId: string) {
+  return invoke<SkillRecord>("refresh_skill", {
+    skillId
+  });
+}
+
+export function exportSkill(skillId: string) {
+  return invoke<SkillExportReport | null>("export_skill", {
+    skillId
+  });
+}
+
+export function openSkillDirectory(skillId: string) {
+  return invoke<string>("open_skill_directory", {
+    skillId
+  });
 }
 
 export function setSkillEnabled(skillId: string, enabled: boolean) {

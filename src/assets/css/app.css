@@ -374,6 +374,21 @@ a {
     var(--surface);
 }
 
+.chat-room__composer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-room__composer-stack--approval {
+  scroll-margin-bottom: 24px;
+}
+
+.chat-room__composer--approval {
+  border-color: rgba(251, 191, 36, 0.32);
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.12);
+}
+
 .chat-room__rail {
   display: flex;
   flex-direction: column;
@@ -1834,6 +1849,14 @@ a {
   padding: 14px 16px;
 }
 
+.approval-panel--composer {
+  border-color: rgba(251, 191, 36, 0.32);
+  background:
+    linear-gradient(180deg, rgba(251, 191, 36, 0.12), rgba(251, 191, 36, 0.03) 100%),
+    var(--surface);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+}
+
 .approval-list {
   display: grid;
   gap: 12px;
@@ -2184,6 +2207,25 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.skills-paths {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-soft);
+}
+
+.skills-path-block {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--foreground);
+  font-size: 0.83rem;
+  line-height: 1.45;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .skills-tag {

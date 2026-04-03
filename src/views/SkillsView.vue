@@ -9,7 +9,8 @@ import { parseTags, useSkillStore, type SkillItem, type SkillTemplateItem } from
 
 const skillStore = useSkillStore();
 const router = useRouter();
-const { activeSkill, activeSkillDetail, enabledCount, importedCount, skills, templates } = storeToRefs(skillStore);
+const { activeSkill, activeSkillDetail, enabledCount, importedCount, skills, templates } =
+  storeToRefs(skillStore);
 const { t } = useI18n();
 
 const search = ref("");
@@ -67,7 +68,15 @@ onMounted(async () => {
 });
 
 function resolveSourceLabel(skill: SkillItem) {
-  return skill.sourceKind === "template" ? t("skills.sourceTemplate") : t("skills.sourceImported");
+  if (skill.sourceKind === "template") {
+    return t("skills.sourceTemplate");
+  }
+
+  if (skill.sourceKind === "imported") {
+    return t("skills.sourceImported");
+  }
+
+  return t("skills.sourceManual");
 }
 
 function resolveSkillTags(skill: SkillItem) {
@@ -77,6 +86,10 @@ function resolveSkillTags(skill: SkillItem) {
 function handleSelectSkill(skillId: string) {
   feedback.value = "";
   skillStore.setActiveSkill(skillId);
+}
+
+function handleEditSkill(skillId: string) {
+  router.push(`/skills/${skillId}/edit`);
 }
 
 async function handleImportDirectory() {
@@ -90,7 +103,14 @@ async function handleImportDirectory() {
   }
 }
 
-async function handleInstallTemplate(template: SkillTemplateItem) {
+async function handleInstallTemplate(template: SkillTemplateItem & { installed: boolean }) {
+  if (template.installed) {
+    const confirmed = window.confirm(t("skills.prompts.reinstallTemplate", { name: template.name }));
+    if (!confirmed) {
+      return;
+    }
+  }
+
   feedback.value = "";
 
   try {
@@ -109,6 +129,61 @@ async function handleToggleSkill(skill: SkillItem) {
     feedback.value = updated.enabled ? t("skills.feedback.enabled", { name: skill.name }) : t("skills.feedback.disabled", { name: skill.name });
   } catch {
     feedback.value = t("skills.feedback.toggleFailed");
+  }
+}
+
+async function handleDuplicateSkill(skill: SkillItem) {
+  feedback.value = "";
+
+  try {
+    const duplicated = await skillStore.duplicateSkill(skill.id);
+    feedback.value = t("skills.feedback.duplicated", { name: duplicated.name });
+  } catch {
+    feedback.value = t("skills.feedback.duplicateFailed");
+  }
+}
+
+async function handleRefreshSkill(skill: SkillItem) {
+  const confirmed =
+    skill.sourceKind === "template" || skill.sourceKind === "imported"
+      ? window.confirm(t("skills.prompts.refreshSkill", { name: skill.name }))
+      : true;
+
+  if (!confirmed) {
+    return;
+  }
+
+  feedback.value = "";
+
+  try {
+    const refreshed = await skillStore.refreshSkill(skill.id);
+    feedback.value = t("skills.feedback.refreshed", { name: refreshed.name });
+  } catch {
+    feedback.value = t("skills.feedback.refreshFailed");
+  }
+}
+
+async function handleExportSkill(skill: SkillItem) {
+  feedback.value = "";
+
+  try {
+    const exported = await skillStore.exportSkill(skill.id);
+    feedback.value = exported
+      ? t("skills.feedback.exported", { path: exported.path })
+      : t("skills.feedback.exportCancelled");
+  } catch {
+    feedback.value = t("skills.feedback.exportFailed");
+  }
+}
+
+async function handleOpenDirectory(skill: SkillItem) {
+  feedback.value = "";
+
+  try {
+    await skillStore.openSkillDirectory(skill.id);
+    feedback.value = t("skills.feedback.openedDirectory");
+  } catch {
+    feedback.value = t("skills.feedback.openDirectoryFailed");
   }
 }
 
@@ -216,6 +291,9 @@ async function handleDeleteSkill(skill: SkillItem) {
               <div class="row" style="justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <span class="muted">{{ t("skills.updatedAt", { value: formatTimestamp(skill.updatedAt, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) }}</span>
                 <div class="row" style="flex-wrap: wrap;">
+                  <Button variant="ghost" :disabled="skillStore.isSaving || skillStore.isImporting" @click.stop="handleEditSkill(skill.id)">
+                    {{ t("skills.editSkill") }}
+                  </Button>
                   <Button variant="secondary" :disabled="skillStore.isSaving || skillStore.isImporting" @click.stop="handleToggleSkill(skill)">
                     {{ skill.enabled ? t("skills.disable") : t("skills.enable") }}
                   </Button>
@@ -268,6 +346,39 @@ async function handleDeleteSkill(skill: SkillItem) {
             <div class="summary-card summary-card--static">
               <span class="muted">{{ t("skills.slug") }}</span>
               <strong>{{ activeSkillDetail.skill.slug }}</strong>
+            </div>
+          </div>
+
+          <div class="row" style="flex-wrap: wrap;">
+            <Button variant="secondary" :disabled="skillStore.isSaving" @click="handleEditSkill(activeSkillDetail.skill.id)">
+              {{ t("skills.editSkill") }}
+            </Button>
+            <Button variant="ghost" :disabled="skillStore.isSaving" @click="handleDuplicateSkill(activeSkillDetail.skill)">
+              {{ t("skills.duplicate") }}
+            </Button>
+            <Button variant="ghost" :disabled="skillStore.isSaving" @click="handleRefreshSkill(activeSkillDetail.skill)">
+              {{ t("skills.refresh") }}
+            </Button>
+            <Button variant="ghost" :disabled="skillStore.isExporting" @click="handleExportSkill(activeSkillDetail.skill)">
+              {{ t("skills.export") }}
+            </Button>
+            <Button variant="ghost" @click="handleOpenDirectory(activeSkillDetail.skill)">
+              {{ t("skills.openFolder") }}
+            </Button>
+          </div>
+
+          <div class="stack skills-paths" style="gap: 10px;">
+            <div class="stack" style="gap: 4px;">
+              <span class="muted">{{ t("skills.directoryPath") }}</span>
+              <code class="skills-path-block">{{ activeSkillDetail.directoryPath }}</code>
+            </div>
+            <div class="stack" style="gap: 4px;">
+              <span class="muted">{{ t("skills.manifestPath") }}</span>
+              <code class="skills-path-block">{{ activeSkillDetail.manifestPath }}</code>
+            </div>
+            <div v-if="activeSkillDetail.sourcePath" class="stack" style="gap: 4px;">
+              <span class="muted">{{ t("skills.sourcePath") }}</span>
+              <code class="skills-path-block">{{ activeSkillDetail.sourcePath }}</code>
             </div>
           </div>
 

@@ -9,6 +9,7 @@ import SettingsView from "@/views/SettingsView.vue";
 import ChannelCreateView from "@/views/ChannelCreateView.vue";
 import McpCreateView from "@/views/McpCreateView.vue";
 import SkillCreateView from "@/views/SkillCreateView.vue";
+import SkillEditView from "@/views/SkillEditView.vue";
 
 export const routes = [
   {
@@ -85,6 +86,15 @@ export const routes = [
     meta: {
       titleKey: "routes.skillsCreate.title",
       descriptionKey: "routes.skillsCreate.description"
+    }
+  },
+  {
+    path: "/skills/:skillId/edit",
+    name: "skills-edit",
+    component: SkillEditView,
+    meta: {
+      titleKey: "routes.skillsEdit.title",
+      descriptionKey: "routes.skillsEdit.description"
     }
   },
   {

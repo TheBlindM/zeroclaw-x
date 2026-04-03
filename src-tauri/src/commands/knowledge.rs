@@ -46,7 +46,7 @@ pub fn create_project_knowledge_note(
 }
 
 #[tauri::command]
-pub fn import_project_knowledge_files(
+pub async fn import_project_knowledge_files(
     app: AppHandle,
     state: State<'_, AppState>,
     project_id: String,

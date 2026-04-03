@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import { RouterView } from "vue-router";
+import { useChatStream } from "@/composables/useChatStream";
 import AppSidebar from "./AppSidebar.vue";
 import { useAppStore } from "@/stores/app";
 import { useUpdateStore } from "@/stores/update";
 
 const appStore = useAppStore();
 const updateStore = useUpdateStore();
+
+useChatStream();
 
 onMounted(() => {
   appStore.applyTheme(appStore.theme);

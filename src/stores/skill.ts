@@ -2,14 +2,20 @@ import { defineStore } from "pinia";
 import {
   createSkill as createSkillRequest,
   deleteSkill,
+  duplicateSkill as duplicateSkillRequest,
+  exportSkill as exportSkillRequest,
   getSkillDetail,
   importSkillDirectory,
   installSkillTemplate,
   listSkillTemplates,
   listSkills,
+  openSkillDirectory as openSkillDirectoryRequest,
+  refreshSkill as refreshSkillRequest,
   setSkillEnabled,
+  updateSkill as updateSkillRequest,
   type SkillDraft,
   type SkillDetailRecord,
+  type SkillExportReport,
   type SkillRecord,
   type SkillTemplateRecord
 } from "@/api/tauri";
@@ -41,6 +47,9 @@ export interface SkillTemplateItem {
 export interface SkillDetailItem {
   skill: SkillItem;
   markdownContent: string;
+  directoryPath: string;
+  manifestPath: string;
+  sourcePath: string | null;
 }
 
 function normalizeTime(value: string | null | undefined) {
@@ -86,7 +95,10 @@ function mapTemplate(record: SkillTemplateRecord): SkillTemplateItem {
 function mapDetail(record: SkillDetailRecord): SkillDetailItem {
   return {
     skill: mapSkill(record.skill),
-    markdownContent: record.markdown_content
+    markdownContent: record.markdown_content,
+    directoryPath: record.directory_path,
+    manifestPath: record.manifest_path,
+    sourcePath: record.source_path
   };
 }
 
@@ -125,6 +137,7 @@ export const useSkillStore = defineStore("skills", {
     isLoading: false,
     isSaving: false,
     isImporting: false,
+    isExporting: false,
     error: "" as string
   }),
   getters: {
@@ -221,6 +234,22 @@ export const useSkillStore = defineStore("skills", {
         this.isSaving = false;
       }
     },
+    async updateSkill(skillId: string, skill: SkillDraft) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        const updated = this.applySkill(await updateSkillRequest(skillId, skill));
+        await this.loadSkillDetail(updated.id);
+        this.loaded = true;
+        return updated;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
+      }
+    },
     async installTemplate(templateId: string) {
       this.isSaving = true;
       this.error = "";
@@ -256,6 +285,61 @@ export const useSkillStore = defineStore("skills", {
         throw error;
       } finally {
         this.isImporting = false;
+      }
+    },
+    async duplicateSkill(skillId: string) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        const duplicated = this.applySkill(await duplicateSkillRequest(skillId));
+        await this.loadSkillDetail(duplicated.id);
+        this.loaded = true;
+        return duplicated;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
+      }
+    },
+    async refreshSkill(skillId: string) {
+      this.isSaving = true;
+      this.error = "";
+
+      try {
+        const refreshed = this.applySkill(await refreshSkillRequest(skillId));
+        await this.loadSkillDetail(refreshed.id);
+        this.loaded = true;
+        return refreshed;
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isSaving = false;
+      }
+    },
+    async exportSkill(skillId: string) {
+      this.isExporting = true;
+      this.error = "";
+
+      try {
+        return await exportSkillRequest(skillId);
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
+      } finally {
+        this.isExporting = false;
+      }
+    },
+    async openSkillDirectory(skillId: string) {
+      this.error = "";
+
+      try {
+        return await openSkillDirectoryRequest(skillId);
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+        throw error;
       }
     },
     async toggleSkill(skillId: string, enabled: boolean) {

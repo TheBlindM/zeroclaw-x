@@ -1,7 +1,9 @@
 use tauri::{AppHandle, State};
 
 use crate::{
-    models::skill::{SkillDetailRecord, SkillDraft, SkillRecord, SkillTemplateRecord},
+    models::skill::{
+        SkillDetailRecord, SkillDraft, SkillExportReport, SkillRecord, SkillTemplateRecord,
+    },
     services,
     state::AppState,
 };
@@ -22,6 +24,15 @@ pub fn create_skill(state: State<'_, AppState>, skill: SkillDraft) -> Result<Ski
 }
 
 #[tauri::command]
+pub fn update_skill(
+    state: State<'_, AppState>,
+    skill_id: String,
+    skill: SkillDraft,
+) -> Result<SkillRecord, String> {
+    services::skill::update_skill(state.inner(), &skill_id, &skill)
+}
+
+#[tauri::command]
 pub fn get_skill_detail(
     state: State<'_, AppState>,
     skill_id: String,
@@ -38,11 +49,41 @@ pub fn install_skill_template(
 }
 
 #[tauri::command]
-pub fn import_skill_directory(
+pub async fn import_skill_directory(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<SkillRecord>, String> {
     services::skill::import_skill_directory(&app, state.inner())
+}
+
+#[tauri::command]
+pub fn duplicate_skill(
+    state: State<'_, AppState>,
+    skill_id: String,
+) -> Result<SkillRecord, String> {
+    services::skill::duplicate_skill(state.inner(), &skill_id)
+}
+
+#[tauri::command]
+pub fn refresh_skill(state: State<'_, AppState>, skill_id: String) -> Result<SkillRecord, String> {
+    services::skill::refresh_skill(state.inner(), &skill_id)
+}
+
+#[tauri::command]
+pub async fn export_skill(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    skill_id: String,
+) -> Result<Option<SkillExportReport>, String> {
+    services::skill::export_skill(&app, state.inner(), &skill_id)
+}
+
+#[tauri::command]
+pub fn open_skill_directory(
+    state: State<'_, AppState>,
+    skill_id: String,
+) -> Result<String, String> {
+    services::skill::open_skill_directory(state.inner(), &skill_id)
 }
 
 #[tauri::command]

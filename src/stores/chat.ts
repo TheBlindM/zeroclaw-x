@@ -124,6 +124,8 @@ function getLastMessage(list: ChatMessage[]) {
   return list[list.length - 1];
 }
 
+let bootstrapPromise: Promise<void> | null = null;
+
 export const useChatStore = defineStore("chat", {
   state: () => ({
     sessions: [] as ChatSession[],
@@ -134,6 +136,7 @@ export const useChatStore = defineStore("chat", {
     pendingApprovals: {} as Record<string, ChatApprovalRequestPayload[]>,
     agentModes: {} as Record<string, boolean>,
     loadedSessionIds: [] as string[],
+    hasBootstrapped: false,
     isStreaming: false,
     isBootstrapping: false
   }),
@@ -249,13 +252,17 @@ export const useChatStore = defineStore("chat", {
       this.sortSessions();
     },
     async bootstrap() {
+      if (this.hasBootstrapped) {
+        return;
+      }
+
       if (this.isBootstrapping) {
+        await bootstrapPromise;
         return;
       }
 
       this.isBootstrapping = true;
-
-      try {
+      bootstrapPromise = (async () => {
         const records = await listSessions();
         this.sessions = records.map(mapSession);
         this.messages = {};
@@ -269,12 +276,18 @@ export const useChatStore = defineStore("chat", {
         if (this.sessions.length > 0) {
           this.activeSessionId = this.sessions[0].id;
           await this.loadSessionMessages(this.activeSessionId);
-          return;
+        } else {
+          this.createSession();
         }
 
-        this.createSession();
+        this.hasBootstrapped = true;
+      })();
+
+      try {
+        await bootstrapPromise;
       } finally {
         this.isBootstrapping = false;
+        bootstrapPromise = null;
       }
     },
     ensureSession() {

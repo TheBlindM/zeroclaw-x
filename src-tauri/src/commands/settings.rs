@@ -106,7 +106,7 @@ pub fn delete_runtime_profile(
 }
 
 #[tauri::command]
-pub fn export_runtime_profiles(
+pub async fn export_runtime_profiles(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<RuntimeProfilesExportReport>, String> {
@@ -114,7 +114,7 @@ pub fn export_runtime_profiles(
 }
 
 #[tauri::command]
-pub fn import_runtime_profiles(
+pub async fn import_runtime_profiles(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<RuntimeProfilesImportReport>, String> {
@@ -126,7 +126,7 @@ pub fn import_runtime_profiles(
 }
 
 #[tauri::command]
-pub fn pick_runtime_workspace(app: AppHandle) -> Result<Option<String>, String> {
+pub async fn pick_runtime_workspace(app: AppHandle) -> Result<Option<String>, String> {
     services::runtime::pick_runtime_workspace(&app)
 }
 
