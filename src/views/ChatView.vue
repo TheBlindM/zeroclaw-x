@@ -558,15 +558,7 @@ function handleDraftChange(content: string) {
               <template v-else>{{ segment.text }}</template>
             </template>
           </strong>
-          <span class="muted">
-            <template
-              v-for="(segment, index) in highlightMatches(resolveSessionPreview(session.lastMessagePreview))"
-              :key="`${session.id}-preview-${index}`"
-            >
-              <mark v-if="segment.match" class="highlight">{{ segment.text }}</mark>
-              <template v-else>{{ segment.text }}</template>
-            </template>
-          </span>
+
           <div v-if="session.projectId" class="row chat-sessions__project-row">
             <span class="session-project-chip">{{ resolveSessionProjectName(session.projectId) }}</span>
           </div>
