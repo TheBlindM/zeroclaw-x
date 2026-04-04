@@ -96,9 +96,20 @@ const templateCards = computed(() => {
   }));
 });
 
+function resolveActionError(fallbackKey: string) {
+  const message = skillStore.error || t(fallbackKey);
+  skillStore.clearError();
+  return message;
+}
+
 watch(
   activeSkill,
   async (skill) => {
+    previewPath.value = "";
+    previewEntry.value = null;
+    previewContent.value = "";
+    previewLoading.value = false;
+
     if (!skill) {
       return;
     }
@@ -107,7 +118,7 @@ watch(
       try {
         await skillStore.loadSkillDetail(skill.id, true);
       } catch {
-        feedback.value = t("skills.feedback.loadDetailFailed");
+        feedback.value = resolveActionError("skills.feedback.loadDetailFailed");
       }
     }
 
@@ -124,7 +135,7 @@ onMounted(async () => {
     try {
       await skillStore.bootstrap();
     } catch {
-      // render store error inline
+      feedback.value = resolveActionError("skills.feedback.loadSkillsFailed");
     }
   }
 });
@@ -215,7 +226,7 @@ async function handleSelectPreview(relativePath: string) {
     const file = await skillStore.loadSkillFileContent(activeSkill.value.id, relativePath);
     previewContent.value = file.content;
   } catch {
-    feedback.value = t("skills.feedback.loadFileFailed");
+    feedback.value = resolveActionError("skills.feedback.loadFileFailed");
   } finally {
     previewLoading.value = false;
   }
@@ -232,7 +243,7 @@ async function handleImportDirectory() {
     const skill = await skillStore.importDirectory();
     feedback.value = skill ? t("skills.feedback.imported", { name: skill.name }) : t("skills.feedback.importCancelled");
   } catch {
-    feedback.value = t("skills.feedback.importFailed");
+    feedback.value = resolveActionError("skills.feedback.importFailed");
   }
 }
 
@@ -250,7 +261,7 @@ async function handleInstallTemplate(template: SkillTemplateItem & { installed: 
     const skill = await skillStore.installTemplate(template.templateId);
     feedback.value = t("skills.feedback.installed", { name: skill.name });
   } catch {
-    feedback.value = t("skills.feedback.installFailed");
+    feedback.value = resolveActionError("skills.feedback.installFailed");
   }
 }
 
@@ -261,7 +272,7 @@ async function handleToggleSkill(skill: SkillItem) {
     const updated = await skillStore.toggleSkill(skill.id, !skill.enabled);
     feedback.value = updated.enabled ? t("skills.feedback.enabled", { name: skill.name }) : t("skills.feedback.disabled", { name: skill.name });
   } catch {
-    feedback.value = t("skills.feedback.toggleFailed");
+    feedback.value = resolveActionError("skills.feedback.toggleFailed");
   }
 }
 
@@ -272,7 +283,7 @@ async function handleDuplicateSkill(skill: SkillItem) {
     const duplicated = await skillStore.duplicateSkill(skill.id);
     feedback.value = t("skills.feedback.duplicated", { name: duplicated.name });
   } catch {
-    feedback.value = t("skills.feedback.duplicateFailed");
+    feedback.value = resolveActionError("skills.feedback.duplicateFailed");
   }
 }
 
@@ -292,7 +303,7 @@ async function handleRefreshSkill(skill: SkillItem) {
     const refreshed = await skillStore.refreshSkill(skill.id);
     feedback.value = t("skills.feedback.refreshed", { name: refreshed.name });
   } catch {
-    feedback.value = t("skills.feedback.refreshFailed");
+    feedback.value = resolveActionError("skills.feedback.refreshFailed");
   }
 }
 
@@ -305,7 +316,7 @@ async function handleExportSkill(skill: SkillItem) {
       ? t("skills.feedback.exported", { path: exported.path })
       : t("skills.feedback.exportCancelled");
   } catch {
-    feedback.value = t("skills.feedback.exportFailed");
+    feedback.value = resolveActionError("skills.feedback.exportFailed");
   }
 }
 
@@ -316,7 +327,7 @@ async function handleOpenDirectory(skill: SkillItem) {
     await skillStore.openSkillDirectory(skill.id);
     feedback.value = t("skills.feedback.openedDirectory");
   } catch {
-    feedback.value = t("skills.feedback.openDirectoryFailed");
+    feedback.value = resolveActionError("skills.feedback.openDirectoryFailed");
   }
 }
 
@@ -332,7 +343,7 @@ async function handleDeleteSkill(skill: SkillItem) {
     await skillStore.removeSkill(skill.id);
     feedback.value = t("skills.feedback.deleted", { name: skill.name });
   } catch {
-    feedback.value = t("skills.feedback.deleteFailed");
+    feedback.value = resolveActionError("skills.feedback.deleteFailed");
   }
 }
 </script>
@@ -577,6 +588,10 @@ async function handleDeleteSkill(skill: SkillItem) {
                     <span class="muted">{{ t("skills.binaryFileDescription") }}</span>
                   </template>
                 </div>
+                <div v-else-if="!previewEntry" class="empty-state">
+                  <strong>{{ t("skills.noFileSelected") }}</strong>
+                  <span class="muted">{{ t("skills.noPreviewAvailableDescription") }}</span>
+                </div>
                 <pre v-else class="code-block skills-editor-preview">{{ previewContent || activeSkillDetail.markdownContent }}</pre>
               </div>
             </div>
@@ -619,6 +634,6 @@ async function handleDeleteSkill(skill: SkillItem) {
       </div>
     </section>
 
-    <p v-if="feedback || skillStore.error" class="muted">{{ feedback || skillStore.error }}</p>
+    <p v-if="feedback" class="muted">{{ feedback }}</p>
   </div>
 </template>

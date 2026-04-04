@@ -5,6 +5,7 @@ use std::{
     process::Command,
 };
 
+use deunicode::deunicode;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -1265,7 +1266,8 @@ fn next_available_copy_path(root: &Path, file_name: &str) -> PathBuf {
 }
 
 fn slugify(value: &str) -> String {
-    let mut slug = value
+    let transliterated = deunicode(value);
+    let mut slug = transliterated
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() {
@@ -1468,6 +1470,50 @@ mod tests {
             .markdown_content
             .contains("Updated description from source"));
         assert!(imported_dir.join("SKILL.toml").exists());
+
+        let _ = fs::remove_dir_all(app_dir);
+    }
+
+    #[test]
+    fn create_skill_transliterates_non_ascii_name_into_unique_slug() {
+        let app_dir = make_test_dir("zeroclawx-skill-unicode-slug");
+        let state = AppState::new(app_dir.clone()).expect("state should initialize");
+
+        let created = create_skill(
+            &state,
+            &SkillDraft {
+                slug: String::new(),
+                name: "我的技能".to_string(),
+                description: "第一个中文技能".to_string(),
+                version: String::new(),
+                author: String::new(),
+                tags_json: "[]".to_string(),
+                markdown_content: "# 我的技能\n第一个中文技能\n".to_string(),
+                enabled: true,
+            },
+        )
+        .expect("unicode skill should create");
+
+        assert_ne!(created.slug, IMPORTED_SKILL_FALLBACK_SLUG);
+        assert!(!created.slug.trim().is_empty());
+
+        let second = create_skill(
+            &state,
+            &SkillDraft {
+                slug: String::new(),
+                name: "另一个技能".to_string(),
+                description: "第二个中文技能".to_string(),
+                version: String::new(),
+                author: String::new(),
+                tags_json: "[]".to_string(),
+                markdown_content: "# 另一个技能\n第二个中文技能\n".to_string(),
+                enabled: true,
+            },
+        )
+        .expect("second unicode skill should also create");
+
+        assert_ne!(second.slug, IMPORTED_SKILL_FALLBACK_SLUG);
+        assert_ne!(second.slug, created.slug);
 
         let _ = fs::remove_dir_all(app_dir);
     }

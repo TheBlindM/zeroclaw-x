@@ -24,7 +24,7 @@ const projectsStore = useProjectsStore();
 const settingsStore = useSettingsStore();
 const router = useRouter();
 const { t } = useI18n();
-const { activeMessages, activeSessionId, isBootstrapping, isStreaming, sessions } = storeToRefs(chatStore);
+const { activeMessages, activeSessionId, drafts, isBootstrapping, isStreaming, sessions } = storeToRefs(chatStore);
 const { projects } = storeToRefs(projectsStore);
 const { status, statusLoaded } = storeToRefs(settingsStore);
 const sessionSearch = ref("");
@@ -59,6 +59,10 @@ const activePendingApprovals = computed(() =>
 const activeAgentMode = computed(() =>
   activeSessionId.value ? chatStore.agentModes[activeSessionId.value] ?? false : false
 );
+const activeDraft = computed(() => {
+  const sessionId = activeSessionId.value;
+  return sessionId ? drafts.value[sessionId] ?? "" : "";
+});
 const selectedScopedDocumentIds = computed(() => new Set(activeKnowledgeScope.value?.document_ids ?? []));
 const projectNameById = computed(() =>
   Object.fromEntries(projects.value.map((project) => [project.id, project.name])) as Record<string, string>
@@ -269,6 +273,7 @@ onBeforeUnmount(() => {
 async function handleSubmit(content: string) {
   const sessionId = chatStore.ensureSession();
   chatStore.setActiveSession(sessionId);
+  chatStore.clearSessionDraft(sessionId);
   chatStore.appendUserMessage(sessionId, content);
   chatStore.beginAssistantMessage(sessionId);
 
@@ -466,6 +471,11 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
     console.error("Failed to resolve tool approval", error);
     approvalFeedback.value = t("chat.feedback.approvalFailed");
   }
+}
+
+function handleDraftChange(content: string) {
+  const sessionId = chatStore.ensureSession();
+  chatStore.setSessionDraft(sessionId, content);
 }
 </script>
 
@@ -667,7 +677,12 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
             </div>
 
             <div class="chat-room__composer panel" :class="{ 'chat-room__composer--approval': activePendingApprovals.length > 0 }">
-              <ChatComposer :busy="isStreaming || isBootstrapping" @submit="handleSubmit" />
+              <ChatComposer
+                :model-value="activeDraft"
+                :busy="isStreaming || isBootstrapping"
+                @update:model-value="handleDraftChange"
+                @submit="handleSubmit"
+              />
             </div>
           </div>
         </div>

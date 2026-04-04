@@ -131,6 +131,7 @@ export const useChatStore = defineStore("chat", {
     sessions: [] as ChatSession[],
     activeSessionId: "" as string,
     messages: {} as Record<string, ChatMessage[]>,
+    drafts: {} as Record<string, string>,
     contextPreviews: {} as Record<string, ChatContextPayload | null>,
     knowledgeScopes: {} as Record<string, SessionKnowledgeScopeRecord>,
     pendingApprovals: {} as Record<string, ChatApprovalRequestPayload[]>,
@@ -266,6 +267,7 @@ export const useChatStore = defineStore("chat", {
         const records = await listSessions();
         this.sessions = records.map(mapSession);
         this.messages = {};
+        this.drafts = {};
         this.contextPreviews = {};
         this.knowledgeScopes = {};
         this.pendingApprovals = {};
@@ -307,6 +309,7 @@ export const useChatStore = defineStore("chat", {
       const session = createSessionRecord();
       this.sessions.unshift(session);
       this.messages[session.id] = [buildWelcomeMessage(session.createdAt)];
+      this.drafts[session.id] = "";
       this.contextPreviews[session.id] = null;
       this.knowledgeScopes[session.id] = createDefaultKnowledgeScope(session.id);
       this.pendingApprovals[session.id] = [];
@@ -320,6 +323,12 @@ export const useChatStore = defineStore("chat", {
     },
     setActiveSession(sessionId: string) {
       this.activeSessionId = sessionId;
+    },
+    setSessionDraft(sessionId: string, content: string) {
+      this.drafts[sessionId] = content;
+    },
+    clearSessionDraft(sessionId: string) {
+      this.drafts[sessionId] = "";
     },
     markSessionPersisted(sessionId: string) {
       const session = this.findSession(sessionId);
@@ -384,6 +393,7 @@ export const useChatStore = defineStore("chat", {
 
       this.sessions = this.sessions.filter((item) => item.id !== sessionId);
       delete this.messages[sessionId];
+      delete this.drafts[sessionId];
       delete this.contextPreviews[sessionId];
       delete this.knowledgeScopes[sessionId];
       delete this.pendingApprovals[sessionId];
@@ -407,6 +417,7 @@ export const useChatStore = defineStore("chat", {
       await this.loadSessionMessages(sessionId);
     },
     async loadSessionMessages(sessionId: string) {
+      this.drafts[sessionId] ??= "";
       this.pendingApprovals[sessionId] ??= [];
       this.agentModes[sessionId] ??= false;
 

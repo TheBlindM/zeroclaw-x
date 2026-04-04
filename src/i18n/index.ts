@@ -642,6 +642,7 @@ const en = {
     detailDescription: "Inspect the packaged skill files that will be synced into the runtime workspace.",
     selectSkillTitle: "Select a skill",
     selectSkillDescription: "Choose an installed skill to inspect its metadata and markdown content.",
+    noPreviewAvailableDescription: "This skill does not currently expose a previewable file.",
     loadingDetailTitle: "Loading skill detail",
     loadingDetailDescription: "Reading the stored skill instructions from disk.",
     templatesTitle: "Starter templates",
@@ -651,9 +652,14 @@ const en = {
       reinstallTemplate: "Reinstall template \"{name}\" and replace its local files?",
       refreshSkill: "Refresh skill \"{name}\" from its saved source? Local file changes will be replaced.",
       discardFileChanges: "Discard unsaved changes in the current file?",
+      leaveEditorWithUnsavedChanges: "Leave this page and discard unsaved changes?",
       newFilePath: "Create a new file at which relative path? Example: scripts/checks.py",
       newFolderPath: "Create a new folder at which relative path? Example: references/api",
       deleteEntry: "Delete \"{path}\" from this skill package?"
+    },
+    validation: {
+      nameRequired: "Enter a skill name before saving.",
+      descriptionRequired: "Enter a short description before saving."
     },
     feedback: {
       created: "Created skill {name}.",
@@ -679,6 +685,7 @@ const en = {
       toggleFailed: "Updating the skill enabled state failed.",
       deleted: "Deleted skill {name}.",
       deleteFailed: "Deleting the skill failed.",
+      loadSkillsFailed: "Loading the skills library failed.",
       loadDetailFailed: "Loading the skill detail failed.",
       loadFileFailed: "Loading the selected file failed.",
       fileSaved: "Saved {path}.",
@@ -687,6 +694,7 @@ const en = {
       createEntryFailed: "Creating the file or folder failed.",
       entryDeleted: "Deleted {path}.",
       deleteEntryFailed: "Deleting the selected file or folder failed.",
+      saveFileBeforeMetadata: "Save or discard changes in {path} before saving metadata.",
       assetsImported: "Imported {count} asset files.",
       importAssetsFailed: "Importing asset files failed."
       ,
@@ -1724,6 +1732,7 @@ const zh = {
     detailDescription: "查看会同步到运行时工作区的整个技能包文件。",
     selectSkillTitle: "选择一个技能",
     selectSkillDescription: "从左侧选择一个已安装技能，查看它的元数据和说明内容。",
+    noPreviewAvailableDescription: "这个技能当前没有可预览的文件。",
     loadingDetailTitle: "正在加载技能详情",
     loadingDetailDescription: "正在从磁盘读取保存的技能说明。",
     templatesTitle: "内置模板",
@@ -1733,9 +1742,14 @@ const zh = {
       reinstallTemplate: "重新安装模板“{name}”并覆盖它的本地文件？",
       refreshSkill: "从保存的来源刷新技能“{name}”？本地文件修改会被替换。",
       discardFileChanges: "放弃当前文件中未保存的修改？",
+      leaveEditorWithUnsavedChanges: "离开当前页面并放弃未保存的修改？",
       newFilePath: "请输入新文件的相对路径，例如：scripts/checks.py",
       newFolderPath: "请输入新目录的相对路径，例如：references/api",
       deleteEntry: "确定从当前技能包中删除“{path}”吗？"
+    },
+    validation: {
+      nameRequired: "请先填写技能名称。",
+      descriptionRequired: "请先填写简短描述。"
     },
     feedback: {
       ...en.skills.feedback,
@@ -1762,6 +1776,7 @@ const zh = {
       toggleFailed: "更新技能启用状态失败。",
       deleted: "已删除技能 {name}。",
       deleteFailed: "删除技能失败。",
+      loadSkillsFailed: "加载技能库失败。",
       loadDetailFailed: "加载技能详情失败。",
       loadFileFailed: "加载所选文件失败。",
       fileSaved: "已保存 {path}。",
@@ -1770,6 +1785,7 @@ const zh = {
       createEntryFailed: "创建文件或目录失败。",
       entryDeleted: "已删除 {path}。",
       deleteEntryFailed: "删除所选文件或目录失败。",
+      saveFileBeforeMetadata: "请先保存或放弃 {path} 的修改，再保存元数据。",
       assetsImported: "已导入 {count} 个资源文件。",
       importAssetsFailed: "导入资源文件失败。"
       ,

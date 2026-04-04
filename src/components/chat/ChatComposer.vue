@@ -5,16 +5,21 @@ import { useI18n } from "vue-i18n";
 import Button from "@/components/ui/Button.vue";
 
 const props = defineProps<{
+  modelValue?: string;
   busy?: boolean;
 }>();
 
 const emit = defineEmits<{
+  "update:modelValue": [value: string];
   submit: [value: string];
 }>();
 
 const { t } = useI18n();
-const draft = ref("");
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const draft = computed({
+  get: () => props.modelValue ?? "",
+  set: (value: string) => emit("update:modelValue", value)
+});
 const canSubmit = computed(() => draft.value.trim().length > 0 && !props.busy);
 
 function resizeComposer() {
@@ -32,7 +37,6 @@ function handleSubmit() {
     return;
   }
   emit("submit", draft.value.trim());
-  draft.value = "";
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -42,10 +46,13 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
-watch(draft, async () => {
-  await nextTick();
-  resizeComposer();
-});
+watch(
+  () => draft.value,
+  async () => {
+    await nextTick();
+    resizeComposer();
+  }
+);
 
 onMounted(() => {
   resizeComposer();

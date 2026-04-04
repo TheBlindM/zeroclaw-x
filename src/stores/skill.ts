@@ -201,6 +201,9 @@ export const useSkillStore = defineStore("skills", {
     }
   },
   actions: {
+    clearError() {
+      this.error = "";
+    },
     setActiveSkill(skillId: string) {
       this.activeSkillId = skillId;
       if (this.detailSkillId !== skillId) {

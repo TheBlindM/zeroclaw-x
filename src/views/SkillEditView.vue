@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import SkillFileTree from "@/components/skills/SkillFileTree.vue";
 import Button from "@/components/ui/Button.vue";
 import { parseTags, useSkillStore, type SkillFileEntryItem } from "@/stores/skill";
 
 const PROTECTED_CREATE_ROOT_PATHS = new Set(["SKILL.md", "SKILL.toml", "scripts", "references", "assets"]);
+const DEFAULT_CREATE_VERSION = "0.1.0";
+const DEFAULT_CREATE_PATHS = ["SKILL.md", "SKILL.toml", "assets", "references", "scripts"];
 
 const skillStore = useSkillStore();
 const route = useRoute();
@@ -26,6 +28,7 @@ const selectedEntry = ref<SkillFileEntryItem | null>(null);
 const draftFileTree = ref<SkillFileEntryItem[]>([]);
 const draftFileContents = ref<Record<string, string>>({});
 const draftMarkdownTouched = ref(false);
+const suppressUnsavedGuard = ref(false);
 const createEntryForm = reactive({
   path: ""
 });
@@ -63,6 +66,48 @@ const metadataPreview = computed(() =>
     .filter(Boolean)
     .join("\n")
 );
+const hasMetadataChanges = computed(() => {
+  if (isCreateMode.value) {
+    const currentPaths = collectRelativePaths(draftFileTree.value);
+    const hasDraftFilesChanged =
+      currentPaths.length !== DEFAULT_CREATE_PATHS.length ||
+      currentPaths.some((path, index) => path !== DEFAULT_CREATE_PATHS[index]);
+    const hasDraftContentChanged = Object.entries(draftFileContents.value).some(([relativePath, content]) => {
+      if (relativePath === "SKILL.md") {
+        return normalizeMarkdownContent(content) !== buildDefaultMarkdown();
+      }
+
+      return content !== "";
+    });
+
+    return (
+      form.name.trim() !== "" ||
+      form.slug.trim() !== "" ||
+      form.description.trim() !== "" ||
+      form.version.trim() !== DEFAULT_CREATE_VERSION ||
+      form.author.trim() !== "" ||
+      form.tags.trim() !== "" ||
+      form.enabled !== true ||
+      hasDraftFilesChanged ||
+      hasDraftContentChanged
+    );
+  }
+
+  if (!activeDetail.value) {
+    return false;
+  }
+
+  return (
+    form.name.trim() !== activeDetail.value.skill.name ||
+    form.slug.trim() !== activeDetail.value.skill.slug ||
+    form.description.trim() !== activeDetail.value.skill.description ||
+    form.version.trim() !== activeDetail.value.skill.version ||
+    form.author.trim() !== activeDetail.value.skill.author ||
+    JSON.stringify(splitTags(form.tags)) !== JSON.stringify(parseTags(activeDetail.value.skill.tagsJson)) ||
+    form.enabled !== activeDetail.value.skill.enabled
+  );
+});
+const hasUnsavedChanges = computed(() => fileDirty.value || hasMetadataChanges.value);
 const selectedDirectory = computed(() => {
   if (!selectedEntry.value) {
     return "";
@@ -124,6 +169,20 @@ function splitTags(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function collectRelativePaths(entries: SkillFileEntryItem[]) {
+  const paths: string[] = [];
+
+  const visit = (nodeEntries: SkillFileEntryItem[]) => {
+    for (const entry of nodeEntries) {
+      paths.push(entry.relativePath);
+      visit(entry.children);
+    }
+  };
+
+  visit(entries);
+  return paths.sort((left, right) => left.localeCompare(right));
 }
 
 function normalizeMarkdownContent(markdown: string) {
@@ -318,6 +377,56 @@ function setDraftFileContent(relativePath: string, content: string) {
   updateDraftFileSize(relativePath, content.length);
 }
 
+function resolveActionError(fallbackKey: string) {
+  const message = skillStore.error || t(fallbackKey);
+  skillStore.clearError();
+  return message;
+}
+
+function validateMetadataForm() {
+  if (!form.name.trim()) {
+    feedback.value = t("skills.validation.nameRequired");
+    return false;
+  }
+
+  if (!form.description.trim()) {
+    feedback.value = t("skills.validation.descriptionRequired");
+    return false;
+  }
+
+  return true;
+}
+
+function hasUnsavedNonMarkdownFileChanges() {
+  return (
+    fileDirty.value &&
+    selectedEntry.value?.kind === "file" &&
+    selectedEntry.value.relativePath !== "SKILL.md"
+  );
+}
+
+function shouldWarnAboutUnsavedChanges() {
+  return !suppressUnsavedGuard.value && hasUnsavedChanges.value;
+}
+
+function confirmLeaveEditor() {
+  if (!shouldWarnAboutUnsavedChanges()) {
+    return true;
+  }
+
+  return window.confirm(t("skills.prompts.leaveEditorWithUnsavedChanges"));
+}
+
+async function runWithoutUnsavedGuard<T>(task: () => Promise<T>) {
+  suppressUnsavedGuard.value = true;
+
+  try {
+    return await task();
+  } finally {
+    suppressUnsavedGuard.value = false;
+  }
+}
+
 function syncFormFromDetail() {
   if (!activeDetail.value) {
     return;
@@ -336,6 +445,7 @@ function initializeCreateMode() {
   ready.value = false;
   feedback.value = "";
   fileFeedback.value = "";
+  skillStore.clearError();
   fileDirty.value = false;
   fileLoading.value = false;
   draftMarkdownTouched.value = false;
@@ -363,6 +473,7 @@ async function loadExistingSkill() {
   ready.value = false;
   feedback.value = "";
   fileFeedback.value = "";
+  skillStore.clearError();
   fileDirty.value = false;
   fileLoading.value = false;
 
@@ -377,7 +488,7 @@ async function loadExistingSkill() {
     await openFile(firstPreviewable?.relativePath ?? "SKILL.md", { force: true });
     ready.value = true;
   } catch {
-    feedback.value = t("skills.feedback.loadDetailFailed");
+    feedback.value = resolveActionError("skills.feedback.loadDetailFailed");
   }
 }
 
@@ -422,7 +533,7 @@ async function openFile(relativePath: string, options?: { force?: boolean }) {
     const file = await skillStore.loadSkillFileContent(skillId.value, relativePath);
     editorContent.value = file.content;
   } catch {
-    fileFeedback.value = t("skills.feedback.loadFileFailed");
+    fileFeedback.value = resolveActionError("skills.feedback.loadFileFailed");
   } finally {
     fileLoading.value = false;
   }
@@ -459,7 +570,7 @@ function addDraftEntry(parentPath: string, name: string, entryKind: "file" | "di
   if (entryKind === "directory") {
     collection.push(makeDraftDirectory(relativePath));
   } else {
-    const initialContent = isPreviewableTextPath(relativePath) ? "" : "";
+    const initialContent = "";
     collection.push(makeDraftFile(relativePath, initialContent));
     if (isPreviewableTextPath(relativePath) && relativePath !== "SKILL.toml") {
       setDraftFileContent(relativePath, initialContent);
@@ -550,6 +661,10 @@ async function handleCreateSkillPackage() {
   feedback.value = "";
   fileFeedback.value = "";
 
+  if (!validateMetadataForm()) {
+    return;
+  }
+
   try {
     if (fileDirty.value) {
       await persistDraftSelectedFile();
@@ -588,18 +703,30 @@ async function handleCreateSkillPackage() {
       }
     }
 
-    await router.replace(`/skills/${created.id}/edit`);
+    await runWithoutUnsavedGuard(() => router.replace(`/skills/${created.id}/edit`));
   } catch {
-    feedback.value = t("skills.feedback.createFailed");
+    feedback.value = resolveActionError("skills.feedback.createFailed");
   }
 }
 
 async function handleSaveMetadata() {
   feedback.value = "";
+  fileFeedback.value = "";
+
+  if (!validateMetadataForm()) {
+    return;
+  }
+
+  if (hasUnsavedNonMarkdownFileChanges()) {
+    feedback.value = t("skills.feedback.saveFileBeforeMetadata", {
+      path: selectedEntry.value?.relativePath ?? selectedPath.value ?? "SKILL.md"
+    });
+    return;
+  }
 
   try {
     await skillStore.updateSkill(skillId.value, {
-      slug: form.slug,
+      slug: form.slug.trim(),
       name: form.name.trim(),
       description: form.description.trim(),
       version: form.version.trim(),
@@ -611,9 +738,14 @@ async function handleSaveMetadata() {
     });
     await skillStore.loadSkillDetail(skillId.value, true);
     syncFormFromDetail();
+    if (selectedPath.value === "SKILL.md") {
+      selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], "SKILL.md");
+      editorContent.value = activeDetail.value?.markdownContent ?? "";
+      fileDirty.value = false;
+    }
     feedback.value = t("skills.feedback.updated", { name: form.name.trim() });
   } catch {
-    feedback.value = t("skills.feedback.updateFailed");
+    feedback.value = resolveActionError("skills.feedback.updateFailed");
   }
 }
 
@@ -646,7 +778,7 @@ async function handleSaveFile() {
     selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], saved.relativePath);
     fileFeedback.value = t("skills.feedback.fileSaved", { path: saved.relativePath });
   } catch {
-    fileFeedback.value = t("skills.feedback.fileSaveFailed");
+    fileFeedback.value = resolveActionError("skills.feedback.fileSaveFailed");
   }
 }
 
@@ -702,7 +834,7 @@ async function submitCreateEntry() {
     fileFeedback.value = t("skills.feedback.entryCreated", { name: parsed.name });
     cancelCreateEntry();
   } catch {
-    fileFeedback.value = t("skills.feedback.createEntryFailed");
+    fileFeedback.value = resolveActionError("skills.feedback.createEntryFailed");
   }
 }
 
@@ -745,7 +877,7 @@ async function handleDeleteSelected() {
     }
     fileFeedback.value = t("skills.feedback.entryDeleted", { path: deletedPath });
   } catch {
-    fileFeedback.value = t("skills.feedback.deleteEntryFailed");
+    fileFeedback.value = resolveActionError("skills.feedback.deleteEntryFailed");
   }
 }
 
@@ -770,9 +902,34 @@ async function handleImportAssets() {
     }
     fileFeedback.value = t("skills.feedback.assetsImported", { count: report.imported_paths.length });
   } catch {
-    fileFeedback.value = t("skills.feedback.importAssetsFailed");
+    fileFeedback.value = resolveActionError("skills.feedback.importAssetsFailed");
   }
 }
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!shouldWarnAboutUnsavedChanges()) {
+    return;
+  }
+
+  event.preventDefault();
+  event.returnValue = "";
+}
+
+onMounted(() => {
+  window.addEventListener("beforeunload", handleBeforeUnload);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", handleBeforeUnload);
+});
+
+onBeforeRouteLeave(() => {
+  if (!confirmLeaveEditor()) {
+    return false;
+  }
+
+  return true;
+});
 
 watch(
   () => [isCreateMode.value, skillId.value],
@@ -835,11 +992,11 @@ watch(metadataPreview, (value) => {
     </section>
 
     <section v-if="!ready" class="panel" style="padding: 20px;">
-      <div class="empty-state">
-        <strong>{{ t("skills.loadingDetailTitle") }}</strong>
-        <span class="muted">{{ feedback || skillStore.error || t("skills.loadingDetailDescription") }}</span>
-      </div>
-    </section>
+        <div class="empty-state">
+          <strong>{{ t("skills.loadingDetailTitle") }}</strong>
+          <span class="muted">{{ feedback || t("skills.loadingDetailDescription") }}</span>
+        </div>
+      </section>
 
     <template v-else>
       <section class="panel" style="padding: 20px;">
@@ -889,7 +1046,7 @@ watch(metadataPreview, (value) => {
             <span>{{ t("skills.enabledToggleCreate") }}</span>
           </label>
 
-          <span v-if="feedback || skillStore.error" class="settings-error">{{ feedback || skillStore.error }}</span>
+          <span v-if="feedback" class="settings-error">{{ feedback }}</span>
 
           <div class="stack" style="gap: 8px;">
             <span class="settings-field__label">{{ t("skills.manifestPreview") }}</span>
@@ -996,7 +1153,7 @@ watch(metadataPreview, (value) => {
 
               <pre v-else class="code-block skills-editor-preview">{{ editorContent }}</pre>
 
-              <span v-if="fileFeedback || skillStore.error" class="settings-error">{{ fileFeedback || skillStore.error }}</span>
+              <span v-if="fileFeedback" class="settings-error">{{ fileFeedback }}</span>
             </div>
           </div>
         </div>
