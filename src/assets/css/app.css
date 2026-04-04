@@ -197,6 +197,7 @@ a {
 .chat-room {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -276,6 +277,7 @@ a {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -283,7 +285,9 @@ a {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 16px;
+  min-width: 0;
   min-height: 0;
+  height: 100%;
 }
 
 .chat-room__hero {
@@ -355,6 +359,7 @@ a {
 .chat-room__stream {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   gap: 14px;
   padding: 16px;
@@ -447,6 +452,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
   overflow: auto;
   padding: 4px 2px 4px 0;
   scroll-behavior: smooth;
@@ -458,6 +464,7 @@ a {
   gap: 12px;
   width: 100%;
   max-width: min(88%, 900px);
+  min-width: 0;
 }
 
 .message[data-role="user"] {
@@ -489,7 +496,7 @@ a {
   flex: 0 1 auto;
   gap: 10px;
   width: auto;
-  min-width: min(200px, calc(100% - 48px));
+  min-width: 0;
   max-width: min(100%, 760px);
   padding: 14px 16px;
   border-radius: 18px;
