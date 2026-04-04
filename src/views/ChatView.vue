@@ -603,7 +603,6 @@ function handleDraftChange(content: string) {
                 {{ activeSession ? resolveSessionPreview(activeSession.lastMessagePreview) : t("chat.noMessagesDescription") }}
               </span>
               <div class="chat-room__hero-meta">
-                <span class="chat-room__hero-stat">{{ runtimeSummary }}</span>
                 <span class="chat-room__hero-stat">
                   {{ t("chat.messagesCount", { count: activeSession?.messageCount ?? 0 }) }}
                 </span>
@@ -615,17 +614,34 @@ function handleDraftChange(content: string) {
                 <Settings2 :size="16" />
                 {{ t("chat.runtimeSettings") }}
               </Button>
+              <div v-if="activeSession?.projectId" class="chat-room__hero-control-group stack">
+                <span class="eyebrow chat-room__hero-control-label">{{ t("chat.knowledgeEyebrow") }}</span>
+                <div class="row knowledge-scope-actions">
+                  <Button
+                    :variant="activeKnowledgeScope?.mode === 'auto' ? 'primary' : 'secondary'"
+                    :disabled="isStreaming"
+                    @click="handleSetKnowledgeMode('auto')"
+                  >
+                    {{ t("chat.auto") }}
+                  </Button>
+                  <Button
+                    :variant="activeKnowledgeScope?.mode === 'manual' ? 'primary' : 'secondary'"
+                    :disabled="isStreaming"
+                    @click="handleSetKnowledgeMode('manual')"
+                  >
+                    {{ t("chat.manual") }}
+                  </Button>
+                </div>
+              </div>
+              <Button :variant="activeAgentMode ? 'primary' : 'secondary'" :disabled="isStreaming || !activeSessionId" @click="handleToggleAgentMode()">
+                <Bot :size="16" />
+                {{ activeAgentMode ? t("chat.agentEnabled") : t("chat.enableAgent") }}
+              </Button>
+              <Button v-if="isStreaming" variant="ghost" @click="handleStop()">{{ t("chat.stopStream") }}</Button>
             </div>
           </div>
 
           <div class="chat-room__stream panel">
-            <div class="chat-room__stream-toolbar row">
-              <span class="muted chat-room__stream-note">
-                {{ activeSession?.projectId ? t("chat.linkedProjectHintAssigned") : t("chat.linkedProjectHintEmpty") }}
-              </span>
-              <Button v-if="isStreaming" variant="ghost" @click="handleStop()">{{ t("chat.stopStream") }}</Button>
-            </div>
-
             <EmptyState
               v-if="isBootstrapping"
               :title="t('chat.loadingHistoryTitle')"
@@ -686,132 +702,6 @@ function handleDraftChange(content: string) {
             </div>
           </div>
         </div>
-
-        <aside class="chat-room__rail">
-          <div class="panel chat-sidebar-summary">
-            <div class="stack chat-panel__stack">
-              <div class="chat-panel__header row">
-                <div class="stack chat-panel__copy">
-                  <span class="eyebrow">{{ t("chat.runtimeEyebrow") }}</span>
-                  <strong>{{ runtimeSummary }}</strong>
-                </div>
-                <span class="session-project-chip">{{ activeAgentMode ? t("chat.agentMode") : t("chat.chatMode") }}</span>
-              </div>
-              <span class="muted chat-sidebar-summary__text">{{ runtimeMeta }}</span>
-              <span class="muted chat-sidebar-summary__text">{{ runtimePolicy }}</span>
-              <div class="chat-sidebar-summary__agent row">
-                <div class="stack chat-panel__copy">
-                  <span class="eyebrow">{{ t("chat.agentEyebrow") }}</span>
-                  <span class="muted">
-                    {{ activeAgentMode ? t("chat.agentEnabledDescription") : t("chat.agentDisabledDescription") }}
-                  </span>
-                </div>
-                <Button :variant="activeAgentMode ? 'primary' : 'secondary'" :disabled="isStreaming || !activeSessionId" @click="handleToggleAgentMode()">
-                  <Bot :size="16" />
-                  {{ activeAgentMode ? t("chat.agentEnabled") : t("chat.enableAgent") }}
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="activeSession?.projectId" class="panel knowledge-scope-panel">
-            <div class="stack chat-panel__stack">
-              <div class="chat-panel__header row">
-                <div class="stack chat-panel__copy">
-                  <span class="eyebrow">{{ t("chat.knowledgeEyebrow") }}</span>
-                  <strong>{{ resolveSessionProjectName(activeSession.projectId) }}</strong>
-                  <span class="muted">{{ t("chat.knowledgeDescription") }}</span>
-                </div>
-                <div class="row knowledge-scope-actions">
-                  <Button
-                    :variant="activeKnowledgeScope?.mode === 'auto' ? 'primary' : 'secondary'"
-                    :disabled="isStreaming"
-                    @click="handleSetKnowledgeMode('auto')"
-                  >
-                    {{ t("chat.auto") }}
-                  </Button>
-                  <Button
-                    :variant="activeKnowledgeScope?.mode === 'manual' ? 'primary' : 'secondary'"
-                    :disabled="isStreaming"
-                    @click="handleSetKnowledgeMode('manual')"
-                  >
-                    {{ t("chat.manual") }}
-                  </Button>
-                </div>
-              </div>
-
-              <span v-if="knowledgeScopeFeedback" class="muted">{{ knowledgeScopeFeedback }}</span>
-
-              <div v-if="isLoadingKnowledgeScope" class="settings-inline-note">
-                {{ t("chat.knowledgeLoading") }}
-              </div>
-
-              <div v-else-if="projectKnowledgeDocuments.length === 0" class="settings-inline-note">
-                {{ t("chat.knowledgeEmpty") }}
-              </div>
-
-              <template v-else-if="activeKnowledgeScope?.mode === 'manual'">
-                <div class="row knowledge-scope-actions knowledge-scope-actions--between">
-                  <span class="muted">{{ t("chat.knowledgeManualHint") }}</span>
-                  <div class="row">
-                    <Button variant="ghost" :disabled="isStreaming" @click="handleSelectAllKnowledge">{{ t("chat.selectAll") }}</Button>
-                    <Button variant="ghost" :disabled="isStreaming" @click="handleClearKnowledgeSelection">{{ t("chat.clear") }}</Button>
-                  </div>
-                </div>
-
-                <div class="knowledge-scope-list">
-                  <label
-                    v-for="document in projectKnowledgeDocuments"
-                    :key="document.id"
-                    class="scope-document-card"
-                    :data-active="selectedScopedDocumentIds.has(document.id)"
-                  >
-                    <input
-                      class="scope-document-card__checkbox"
-                      type="checkbox"
-                      :checked="selectedScopedDocumentIds.has(document.id)"
-                      :disabled="isStreaming"
-                      @change="handleToggleKnowledgeDocument(document.id)"
-                    />
-                    <div class="stack scope-document-card__stack">
-                      <strong>{{ document.title }}</strong>
-                      <span class="muted knowledge-card__source">{{ document.source_path }}</span>
-                      <p class="knowledge-card__preview">{{ document.content_preview }}</p>
-                    </div>
-                  </label>
-                </div>
-              </template>
-
-              <div v-else class="settings-inline-note">
-                {{ t("chat.knowledgeAutoHint") }}
-              </div>
-            </div>
-          </div>
-
-          <div v-if="activeContextPreview" class="panel context-preview-panel">
-            <div class="stack chat-panel__stack chat-panel__stack--tight">
-              <div class="chat-panel__header row">
-                <div class="stack chat-panel__copy">
-                  <span class="eyebrow">{{ t("chat.contextEyebrow") }}</span>
-                  <strong>{{ activeContextPreview.project_name }}</strong>
-                  <span class="muted">{{ resolveContextDescription() }}</span>
-                </div>
-                <span class="session-project-chip">
-                  {{ activeContextPreview.scope_mode === 'manual' ? t("chat.contextManualBadge") : t("chat.contextAutoBadge") }}
-                </span>
-              </div>
-              <div v-if="activeContextPreview.knowledge_titles.length > 0" class="context-preview-chips">
-                <span
-                  v-for="title in activeContextPreview.knowledge_titles"
-                  :key="title"
-                  class="context-preview-chip"
-                >
-                  {{ title }}
-                </span>
-              </div>
-            </div>
-          </div>
-        </aside>
       </div>
     </section>
   </div>
