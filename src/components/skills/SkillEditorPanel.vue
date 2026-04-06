@@ -2,7 +2,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave } from "vue-router";
 import SkillFileTree from "@/components/skills/SkillFileTree.vue";
 import Button from "@/components/ui/Button.vue";
 import { parseTags, useSkillStore, type SkillFileEntryItem } from "@/stores/skill";
@@ -11,9 +11,18 @@ const PROTECTED_CREATE_ROOT_PATHS = new Set(["SKILL.md", "SKILL.toml", "scripts"
 const DEFAULT_CREATE_VERSION = "0.1.0";
 const DEFAULT_CREATE_PATHS = ["SKILL.md", "SKILL.toml", "assets", "references", "scripts"];
 
+const props = defineProps<{
+  mode: "create" | "edit";
+  skillId?: string;
+}>();
+
+const emit = defineEmits<{
+  cancel: [];
+  created: [payload: { skillId: string; name: string }];
+  dirtyChange: [value: boolean];
+}>();
+
 const skillStore = useSkillStore();
-const route = useRoute();
-const router = useRouter();
 const { t } = useI18n();
 
 const feedback = ref("");
@@ -33,9 +42,19 @@ const createEntryForm = reactive({
   path: ""
 });
 
-const isCreateMode = computed(() => route.name === "skills-create");
-const skillId = computed(() => String(route.params.skillId ?? ""));
-const activeDetail = computed(() => skillStore.activeSkillDetail);
+const isCreateMode = computed(() => props.mode === "create");
+const currentSkillId = computed(() => props.skillId ?? "");
+const activeDetail = computed(() => {
+  if (isCreateMode.value) {
+    return null;
+  }
+
+  if (!currentSkillId.value || skillStore.detailSkillId !== currentSkillId.value) {
+    return null;
+  }
+
+  return skillStore.activeSkillDetail;
+});
 const currentFileTree = computed(() => (isCreateMode.value ? draftFileTree.value : activeDetail.value?.fileTree ?? []));
 const currentDirectoryPath = computed(() => (isCreateMode.value ? "" : activeDetail.value?.directoryPath ?? ""));
 const primaryActionLabel = computed(() => (isCreateMode.value ? t("skills.createSkill") : t("skills.saveMetadata")));
@@ -417,16 +436,6 @@ function confirmLeaveEditor() {
   return window.confirm(t("skills.prompts.leaveEditorWithUnsavedChanges"));
 }
 
-async function runWithoutUnsavedGuard<T>(task: () => Promise<T>) {
-  suppressUnsavedGuard.value = true;
-
-  try {
-    return await task();
-  } finally {
-    suppressUnsavedGuard.value = false;
-  }
-}
-
 function syncFormFromDetail() {
   if (!activeDetail.value) {
     return;
@@ -449,6 +458,8 @@ function initializeCreateMode() {
   fileDirty.value = false;
   fileLoading.value = false;
   draftMarkdownTouched.value = false;
+  createEntryMode.value = null;
+  createEntryForm.path = "";
 
   form.name = "";
   form.slug = "";
@@ -470,19 +481,26 @@ function initializeCreateMode() {
 }
 
 async function loadExistingSkill() {
+  if (!currentSkillId.value) {
+    ready.value = false;
+    return;
+  }
+
   ready.value = false;
   feedback.value = "";
   fileFeedback.value = "";
   skillStore.clearError();
   fileDirty.value = false;
   fileLoading.value = false;
+  createEntryMode.value = null;
+  createEntryForm.path = "";
 
   try {
     if (!skillStore.loaded) {
       await skillStore.bootstrap();
     }
 
-    await skillStore.loadSkillDetail(skillId.value, true);
+    await skillStore.loadSkillDetail(currentSkillId.value, true);
     syncFormFromDetail();
     const firstPreviewable = findFirstPreviewable(activeDetail.value?.fileTree ?? []);
     await openFile(firstPreviewable?.relativePath ?? "SKILL.md", { force: true });
@@ -530,7 +548,7 @@ async function openFile(relativePath: string, options?: { force?: boolean }) {
   fileLoading.value = true;
 
   try {
-    const file = await skillStore.loadSkillFileContent(skillId.value, relativePath);
+    const file = await skillStore.loadSkillFileContent(currentSkillId.value, relativePath);
     editorContent.value = file.content;
   } catch {
     fileFeedback.value = resolveActionError("skills.feedback.loadFileFailed");
@@ -703,7 +721,7 @@ async function handleCreateSkillPackage() {
       }
     }
 
-    await runWithoutUnsavedGuard(() => router.replace(`/skills/${created.id}/edit`));
+    emit("created", { skillId: created.id, name: created.name });
   } catch {
     feedback.value = resolveActionError("skills.feedback.createFailed");
   }
@@ -725,7 +743,7 @@ async function handleSaveMetadata() {
   }
 
   try {
-    await skillStore.updateSkill(skillId.value, {
+    await skillStore.updateSkill(currentSkillId.value, {
       slug: form.slug.trim(),
       name: form.name.trim(),
       description: form.description.trim(),
@@ -736,7 +754,7 @@ async function handleSaveMetadata() {
         selectedPath.value === "SKILL.md" && selectedEntry.value?.kind === "file" ? editorContent.value : activeDetail.value?.markdownContent ?? "",
       enabled: form.enabled
     });
-    await skillStore.loadSkillDetail(skillId.value, true);
+    await skillStore.loadSkillDetail(currentSkillId.value, true);
     syncFormFromDetail();
     if (selectedPath.value === "SKILL.md") {
       selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], "SKILL.md");
@@ -771,10 +789,10 @@ async function handleSaveFile() {
       return;
     }
 
-    const saved = await skillStore.saveSkillFileContent(skillId.value, selectedEntry.value.relativePath, editorContent.value);
+    const saved = await skillStore.saveSkillFileContent(currentSkillId.value, selectedEntry.value.relativePath, editorContent.value);
     editorContent.value = saved.content;
     fileDirty.value = false;
-    await skillStore.loadSkillDetail(skillId.value, true);
+    await skillStore.loadSkillDetail(currentSkillId.value, true);
     selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], saved.relativePath);
     fileFeedback.value = t("skills.feedback.fileSaved", { path: saved.relativePath });
   } catch {
@@ -820,7 +838,7 @@ async function submitCreateEntry() {
       return;
     }
 
-    await skillStore.createSkillEntry(skillId.value, {
+    await skillStore.createSkillEntry(currentSkillId.value, {
       parent_path: parsed.parentPath,
       name: parsed.name,
       entry_kind: createEntryMode.value
@@ -866,7 +884,7 @@ async function handleDeleteSelected() {
       return;
     }
 
-    const detail = await skillStore.deleteSkillEntry(skillId.value, deletedPath);
+    const detail = await skillStore.deleteSkillEntry(currentSkillId.value, deletedPath);
     const fallback = findFirstPreviewable(detail.fileTree);
     if (fallback) {
       await openFile(fallback.relativePath, { force: true });
@@ -890,12 +908,12 @@ async function handleImportAssets() {
   fileFeedback.value = "";
 
   try {
-    const report = await skillStore.importSkillAssets(skillId.value);
+    const report = await skillStore.importSkillAssets(currentSkillId.value);
     if (!report) {
       return;
     }
 
-    await skillStore.loadSkillDetail(skillId.value, true);
+    await skillStore.loadSkillDetail(currentSkillId.value, true);
     selectedEntry.value = findFileEntry(skillStore.activeSkillDetail?.fileTree ?? [], report.imported_paths[0] ?? "assets");
     if (report.imported_paths[0]) {
       await openFile(report.imported_paths[0], { force: true });
@@ -904,6 +922,14 @@ async function handleImportAssets() {
   } catch {
     fileFeedback.value = resolveActionError("skills.feedback.importAssetsFailed");
   }
+}
+
+function handleCancel() {
+  if (!confirmLeaveEditor()) {
+    return;
+  }
+
+  emit("cancel");
 }
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
@@ -932,11 +958,11 @@ onBeforeRouteLeave(() => {
 });
 
 watch(
-  () => [isCreateMode.value, skillId.value],
+  () => [props.mode, currentSkillId.value],
   async () => {
     if (isCreateMode.value) {
       initializeCreateMode();
-    } else if (skillId.value) {
+    } else {
       await loadExistingSkill();
     }
   },
@@ -972,91 +998,91 @@ watch(metadataPreview, (value) => {
     editorContent.value = value;
   }
 });
+
+watch(
+  hasUnsavedChanges,
+  (value) => {
+    emit("dirtyChange", value);
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
-  <div class="stack">
-    <section class="panel" style="padding: 24px;">
-      <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
-        <div class="stack" style="gap: 6px; max-width: 760px;">
-          <strong>{{ modeTitle }}</strong>
-          <span class="muted">{{ modeDescription }}</span>
-        </div>
-        <div class="row" style="flex-wrap: wrap;">
-          <Button variant="secondary" @click="router.push('/skills')">{{ t("skills.cancelCreate") }}</Button>
-          <Button :disabled="skillStore.isSaving" @click="handlePrimaryAction">
-            {{ skillStore.isSaving ? (isCreateMode ? t("skills.creating") : t("skills.saving")) : primaryActionLabel }}
-          </Button>
-        </div>
+  <div class="stack" style="gap: 20px; min-height: 0;">
+    <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+      <div class="stack" style="gap: 6px; max-width: 760px;">
+        <strong>{{ modeTitle }}</strong>
+        <span class="muted">{{ modeDescription }}</span>
       </div>
-    </section>
+      <div class="row" style="flex-wrap: wrap;">
+        <Button variant="secondary" @click="handleCancel">{{ t("skills.cancelCreate") }}</Button>
+        <Button :disabled="skillStore.isSaving" @click="handlePrimaryAction">
+          {{ skillStore.isSaving ? (isCreateMode ? t("skills.creating") : t("skills.saving")) : primaryActionLabel }}
+        </Button>
+      </div>
+    </div>
 
-    <section v-if="!ready" class="panel" style="padding: 20px;">
-        <div class="empty-state">
-          <strong>{{ t("skills.loadingDetailTitle") }}</strong>
-          <span class="muted">{{ feedback || t("skills.loadingDetailDescription") }}</span>
-        </div>
-      </section>
+    <div v-if="!ready" class="empty-state">
+      <strong>{{ t("skills.loadingDetailTitle") }}</strong>
+      <span class="muted">{{ feedback || t("skills.loadingDetailDescription") }}</span>
+    </div>
 
     <template v-else>
-      <section class="panel" style="padding: 20px;">
-        <div class="stack" style="gap: 16px;">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
-            <div class="stack" style="gap: 6px;">
-              <strong>{{ form.name || t("skills.createSkill") }}</strong>
-              <span class="muted">{{ t("skills.metadataDescription") }}</span>
-            </div>
-          </div>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("skills.name") }}</span>
-            <input v-model="form.name" class="field" :placeholder="t('skills.namePlaceholder')" />
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("skills.slugInput") }}</span>
-            <input v-model="form.slug" class="field" :placeholder="isCreateMode ? t('skills.slugPlaceholder') : undefined" :disabled="!isCreateMode" />
-            <span v-if="!isCreateMode" class="muted settings-field__hint">{{ t("skills.slugLockedHint") }}</span>
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("skills.descriptionInput") }}</span>
-            <input v-model="form.description" class="field" :placeholder="t('skills.descriptionPlaceholder')" />
-          </label>
-
-          <div class="row" style="align-items: flex-start; flex-wrap: wrap;">
-            <label class="settings-field" style="flex: 1 1 220px;">
-              <span class="settings-field__label">{{ t("skills.versionInput") }}</span>
-              <input v-model="form.version" class="field" :placeholder="t('skills.versionPlaceholder')" />
-            </label>
-
-            <label class="settings-field" style="flex: 1 1 220px;">
-              <span class="settings-field__label">{{ t("skills.authorInput") }}</span>
-              <input v-model="form.author" class="field" :placeholder="t('skills.authorPlaceholder')" />
-            </label>
-          </div>
-
-          <label class="settings-field">
-            <span class="settings-field__label">{{ t("skills.tagsInput") }}</span>
-            <input v-model="form.tags" class="field" :placeholder="t('skills.tagsPlaceholder')" />
-          </label>
-
-          <label class="projects-checkbox">
-            <input v-model="form.enabled" type="checkbox" />
-            <span>{{ t("skills.enabledToggleCreate") }}</span>
-          </label>
-
-          <span v-if="feedback" class="settings-error">{{ feedback }}</span>
-
-          <div class="stack" style="gap: 8px;">
-            <span class="settings-field__label">{{ t("skills.manifestPreview") }}</span>
-            <span class="muted">{{ t("skills.manifestPreviewHint") }}</span>
-            <pre class="code-block skills-editor-preview">{{ metadataPreview }}</pre>
-          </div>
+      <div class="stack" style="gap: 16px;">
+        <div class="stack" style="gap: 6px;">
+          <strong>{{ form.name || t("skills.createSkill") }}</strong>
+          <span class="muted">{{ t("skills.metadataDescription") }}</span>
         </div>
-      </section>
 
-      <section class="panel" style="padding: 20px;">
+        <label class="settings-field">
+          <span class="settings-field__label">{{ t("skills.name") }}</span>
+          <input v-model="form.name" class="field" :placeholder="t('skills.namePlaceholder')" />
+        </label>
+
+        <label class="settings-field">
+          <span class="settings-field__label">{{ t("skills.slugInput") }}</span>
+          <input v-model="form.slug" class="field" :placeholder="isCreateMode ? t('skills.slugPlaceholder') : undefined" :disabled="!isCreateMode" />
+          <span v-if="!isCreateMode" class="muted settings-field__hint">{{ t("skills.slugLockedHint") }}</span>
+        </label>
+
+        <label class="settings-field">
+          <span class="settings-field__label">{{ t("skills.descriptionInput") }}</span>
+          <input v-model="form.description" class="field" :placeholder="t('skills.descriptionPlaceholder')" />
+        </label>
+
+        <div class="row" style="align-items: flex-start; flex-wrap: wrap;">
+          <label class="settings-field" style="flex: 1 1 220px;">
+            <span class="settings-field__label">{{ t("skills.versionInput") }}</span>
+            <input v-model="form.version" class="field" :placeholder="t('skills.versionPlaceholder')" />
+          </label>
+
+          <label class="settings-field" style="flex: 1 1 220px;">
+            <span class="settings-field__label">{{ t("skills.authorInput") }}</span>
+            <input v-model="form.author" class="field" :placeholder="t('skills.authorPlaceholder')" />
+          </label>
+        </div>
+
+        <label class="settings-field">
+          <span class="settings-field__label">{{ t("skills.tagsInput") }}</span>
+          <input v-model="form.tags" class="field" :placeholder="t('skills.tagsPlaceholder')" />
+        </label>
+
+        <label class="projects-checkbox">
+          <input v-model="form.enabled" type="checkbox" />
+          <span>{{ t("skills.enabledToggleCreate") }}</span>
+        </label>
+
+        <span v-if="feedback" class="settings-error">{{ feedback }}</span>
+
+        <div class="stack" style="gap: 8px;">
+          <span class="settings-field__label">{{ t("skills.manifestPreview") }}</span>
+          <span class="muted">{{ t("skills.manifestPreviewHint") }}</span>
+          <pre class="code-block skills-editor-preview">{{ metadataPreview }}</pre>
+        </div>
+      </div>
+
+      <div class="stack" style="gap: 16px; min-height: 0;">
         <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
           <div class="stack" style="gap: 6px;">
             <strong>{{ t("skills.filesTitle") }}</strong>
@@ -1110,7 +1136,7 @@ watch(metadataPreview, (value) => {
                   </div>
                 </div>
                 <Button
-                  v-if="selectedEntry?.kind === 'file' && selectedEntry.editable"
+                  v-if="!isCreateMode && selectedEntry?.kind === 'file' && selectedEntry.editable"
                   :disabled="skillStore.isSaving || !fileDirty"
                   @click="handleSaveFile"
                 >
@@ -1157,7 +1183,7 @@ watch(metadataPreview, (value) => {
             </div>
           </div>
         </div>
-      </section>
+      </div>
     </template>
   </div>
 </template>

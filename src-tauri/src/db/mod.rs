@@ -129,17 +129,7 @@ fn list_sessions_query(filter_sql: &str) -> String {
 }
 
 fn ensure_sessions_agent_mode_column(connection: &Connection) -> Result<(), String> {
-    let mut statement = connection
-        .prepare("PRAGMA table_info(sessions)")
-        .map_err(|error| error.to_string())?;
-
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| error.to_string())?;
-
-    let columns = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+    let columns = get_table_columns(connection, "sessions")?;
 
     if columns.iter().any(|column| column == "agent_mode") {
         return Ok(());
@@ -152,6 +142,64 @@ fn ensure_sessions_agent_mode_column(connection: &Connection) -> Result<(), Stri
         )
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn get_table_columns(connection: &Connection, table_name: &str) -> Result<Vec<String>, String> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table_name})"))
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn table_exists(connection: &Connection, table_name: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+            params![table_name],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(|error| error.to_string())
+}
+
+fn ensure_mcp_servers_columns(connection: &Connection) -> Result<(), String> {
+    let columns = get_table_columns(connection, "mcp_servers")?;
+
+    for (column_name, column_definition) in [
+        ("command", "TEXT NOT NULL DEFAULT ''"),
+        ("arguments_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("url", "TEXT NOT NULL DEFAULT ''"),
+        ("headers_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("environment_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("enabled", "INTEGER NOT NULL DEFAULT 1"),
+        ("last_tested_at", "TEXT"),
+        ("last_test_status", "TEXT"),
+        ("last_test_message", "TEXT"),
+        ("created_at", "TEXT NOT NULL DEFAULT '0'"),
+        ("updated_at", "TEXT NOT NULL DEFAULT '0'"),
+    ] {
+        if columns.iter().any(|column| column == column_name) {
+            continue;
+        }
+
+        connection
+            .execute(
+                &format!(
+                    "ALTER TABLE mcp_servers ADD COLUMN {column_name} {column_definition}"
+                ),
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn clear_session_knowledge_scope(connection: &Connection, session_id: &str) -> Result<(), String> {
@@ -189,10 +237,16 @@ fn collect_unique_document_ids(document_ids: &[String]) -> Vec<String> {
 
 pub fn initialize(db_path: &Path) -> Result<(), String> {
     let connection = connect(db_path)?;
+
+    if table_exists(&connection, "mcp_servers")? {
+        ensure_mcp_servers_columns(&connection)?;
+    }
+
     connection
         .execute_batch(MIGRATION_SQL)
         .map_err(|error| error.to_string())?;
-    ensure_sessions_agent_mode_column(&connection)
+    ensure_sessions_agent_mode_column(&connection)?;
+    ensure_mcp_servers_columns(&connection)
 }
 
 pub fn upsert_session(db_path: &Path, session_id: &str, title: &str) -> Result<(), String> {
@@ -1835,4 +1889,67 @@ pub fn delete_channel(db_path: &Path, channel_id: &str) -> Result<(), String> {
         .execute("DELETE FROM channels WHERE id = ?1", params![channel_id])
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use rusqlite::Connection;
+
+    fn make_test_dir(prefix: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("{prefix}-{stamp}"));
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+        dir
+    }
+
+    #[test]
+    fn initialize_backfills_missing_mcp_columns() {
+        let app_dir = make_test_dir("zeroclawx-mcp-schema");
+        let db_path = app_dir.join("zeroclawx.db");
+        let connection = Connection::open(&db_path).expect("db should open");
+
+        connection
+            .execute(
+                "CREATE TABLE mcp_servers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    transport TEXT NOT NULL
+                 )",
+                [],
+            )
+            .expect("legacy table should be created");
+
+        drop(connection);
+
+        super::initialize(&db_path).expect("initialize should backfill missing columns");
+
+        let created = super::create_mcp_server(
+            &db_path,
+            "playwright",
+            "stdio",
+            "npx",
+            r#"["-y","@playwright/mcp@latest"]"#,
+            "",
+            "{}",
+            "{}",
+            true,
+        )
+        .expect("server creation should succeed after backfill");
+
+        assert_eq!(created.name, "playwright");
+        assert_eq!(created.transport, "stdio");
+        assert_eq!(created.command, "npx");
+        assert_eq!(created.arguments_json, r#"["-y","@playwright/mcp@latest"]"#);
+
+        let _ = fs::remove_dir_all(app_dir);
+    }
 }

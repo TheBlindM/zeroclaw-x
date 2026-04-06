@@ -1,77 +1,21 @@
 <script setup lang="ts">
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { storeToRefs } from "pinia";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter } from "vue-router";
-import SkillFileTree from "@/components/skills/SkillFileTree.vue";
+import SkillDetailPanel from "@/components/skills/SkillDetailPanel.vue";
+import SkillEditorPanel from "@/components/skills/SkillEditorPanel.vue";
 import Button from "@/components/ui/Button.vue";
 import { formatTimestamp } from "@/lib/datetime";
-import { parseTags, useSkillStore, type SkillFileEntryItem, type SkillItem, type SkillTemplateItem } from "@/stores/skill";
+import { parseTags, useSkillStore, type SkillItem, type SkillTemplateItem } from "@/stores/skill";
 
 const skillStore = useSkillStore();
-const router = useRouter();
-const { activeSkill, activeSkillDetail, enabledCount, importedCount, skills, templates } =
-  storeToRefs(skillStore);
+const { activeSkill, enabledCount, importedCount, skills, templates } = storeToRefs(skillStore);
 const { t } = useI18n();
 
 const search = ref("");
 const feedback = ref("");
-const previewPath = ref("SKILL.md");
-const previewContent = ref("");
-const previewLoading = ref(false);
-const previewEntry = ref<SkillFileEntryItem | null>(null);
-const detailFileStats = computed(() => {
-  const totals = {
-    files: 0,
-    folders: 0,
-    assets: 0
-  };
-
-  function walk(entries: SkillFileEntryItem[]) {
-    for (const entry of entries) {
-      if (entry.kind === "directory") {
-        totals.folders += 1;
-        walk(entry.children);
-      } else {
-        totals.files += 1;
-        if (!entry.previewable) {
-          totals.assets += 1;
-        }
-      }
-    }
-  }
-
-  walk(activeSkillDetail.value?.fileTree ?? []);
-  return totals;
-});
-const previewFileExtension = computed(() => {
-  const path = previewEntry.value?.relativePath ?? "";
-  const lastDot = path.lastIndexOf(".");
-  return lastDot >= 0 ? path.slice(lastDot + 1).toLowerCase() : "";
-});
-const previewFileSizeLabel = computed(() => {
-  const size = previewEntry.value?.sizeBytes;
-  if (typeof size !== "number") {
-    return "";
-  }
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-});
-const previewAssetUrl = computed(() => {
-  if (!activeSkillDetail.value || !previewEntry.value || previewEntry.value.kind !== "file" || previewEntry.value.previewable) {
-    return "";
-  }
-  if (!isImagePath(previewEntry.value.relativePath)) {
-    return "";
-  }
-  return convertFileSrc(joinSkillPath(activeSkillDetail.value.directoryPath, previewEntry.value.relativePath));
-});
+const panelMode = ref<"view" | "create" | "edit">("view");
+const editorDirty = ref(false);
 
 const filteredSkills = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -86,7 +30,6 @@ const filteredSkills = computed(() => {
   });
 });
 
-const activeTags = computed(() => parseTags(activeSkill.value?.tagsJson ?? "[]"));
 const templateCards = computed(() => {
   const installed = new Set(skills.value.map((skill) => skill.slug));
   return templates.value.map((template) => ({
@@ -95,40 +38,13 @@ const templateCards = computed(() => {
     tags: parseTags(template.tagsJson)
   }));
 });
+const editorPanelKey = computed(() => `${panelMode.value}:${activeSkill.value?.id ?? "new"}`);
 
 function resolveActionError(fallbackKey: string) {
   const message = skillStore.error || t(fallbackKey);
   skillStore.clearError();
   return message;
 }
-
-watch(
-  activeSkill,
-  async (skill) => {
-    previewPath.value = "";
-    previewEntry.value = null;
-    previewContent.value = "";
-    previewLoading.value = false;
-
-    if (!skill) {
-      return;
-    }
-
-    if (skillStore.detailSkillId !== skill.id) {
-      try {
-        await skillStore.loadSkillDetail(skill.id, true);
-      } catch {
-        feedback.value = resolveActionError("skills.feedback.loadDetailFailed");
-      }
-    }
-
-    const firstPreviewable = findFirstPreviewable(skillStore.activeSkillDetail?.fileTree ?? []);
-    if (firstPreviewable) {
-      await handleSelectPreview(firstPreviewable.relativePath);
-    }
-  },
-  { immediate: true }
-);
 
 onMounted(async () => {
   if (!skillStore.loaded) {
@@ -156,84 +72,59 @@ function resolveSkillTags(skill: SkillItem) {
   return parseTags(skill.tagsJson);
 }
 
-function joinSkillPath(root: string, relativePath: string) {
-  const separator = root.includes("\\") ? "\\" : "/";
-  return `${root.replace(/[\\/]+$/, "")}${separator}${relativePath.split("/").join(separator)}`;
-}
+function confirmLeaveInlineEditor() {
+  if (!editorDirty.value) {
+    return true;
+  }
 
-function isImagePath(relativePath: string) {
-  return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].some((extension) =>
-    relativePath.toLowerCase().endsWith(extension)
-  );
+  return window.confirm(t("skills.prompts.leaveEditorWithUnsavedChanges"));
 }
 
 function handleSelectSkill(skillId: string) {
+  if (skillId === skillStore.activeSkillId) {
+    return;
+  }
+
+  if ((panelMode.value === "create" || panelMode.value === "edit") && !confirmLeaveInlineEditor()) {
+    return;
+  }
+
   feedback.value = "";
+  panelMode.value = "view";
   skillStore.setActiveSkill(skillId);
 }
 
-function findFileEntry(entries: SkillFileEntryItem[], relativePath: string): SkillFileEntryItem | null {
-  for (const entry of entries) {
-    if (entry.relativePath === relativePath) {
-      return entry;
-    }
-
-    const nested = findFileEntry(entry.children, relativePath);
-    if (nested) {
-      return nested;
-    }
-  }
-
-  return null;
-}
-
-function findFirstPreviewable(entries: SkillFileEntryItem[]): SkillFileEntryItem | null {
-  for (const entry of entries) {
-    if (entry.kind === "file" && entry.previewable) {
-      return entry;
-    }
-
-    const nested = findFirstPreviewable(entry.children);
-    if (nested) {
-      return nested;
-    }
-  }
-
-  return null;
-}
-
-async function handleSelectPreview(relativePath: string) {
-  if (!activeSkill.value || !activeSkillDetail.value) {
+function enterCreateMode() {
+  if ((panelMode.value === "create" || panelMode.value === "edit") && !confirmLeaveInlineEditor()) {
     return;
   }
 
-  const entry = findFileEntry(activeSkillDetail.value.fileTree, relativePath);
-  if (!entry) {
-    return;
-  }
-
-  previewPath.value = relativePath;
-  previewEntry.value = entry;
-  previewContent.value = "";
-
-  if (entry.kind === "directory" || !entry.previewable) {
-    return;
-  }
-
-  previewLoading.value = true;
-
-  try {
-    const file = await skillStore.loadSkillFileContent(activeSkill.value.id, relativePath);
-    previewContent.value = file.content;
-  } catch {
-    feedback.value = resolveActionError("skills.feedback.loadFileFailed");
-  } finally {
-    previewLoading.value = false;
-  }
+  feedback.value = "";
+  panelMode.value = "create";
 }
 
-function handleEditSkill(skillId: string) {
-  router.push(`/skills/${skillId}/edit`);
+function enterEditMode(skillId: string) {
+  if ((panelMode.value === "create" || panelMode.value === "edit") && !confirmLeaveInlineEditor()) {
+    return;
+  }
+
+  if (skillStore.activeSkillId !== skillId) {
+    skillStore.setActiveSkill(skillId);
+  }
+  feedback.value = "";
+  panelMode.value = "edit";
+}
+
+function handleEditorCancel() {
+  editorDirty.value = false;
+  panelMode.value = "view";
+}
+
+function handleEditorCreated(payload: { skillId: string; name: string }) {
+  editorDirty.value = false;
+  panelMode.value = "view";
+  skillStore.setActiveSkill(payload.skillId);
+  feedback.value = t("skills.feedback.created", { name: payload.name });
 }
 
 async function handleImportDirectory() {
@@ -338,9 +229,14 @@ async function handleDeleteSkill(skill: SkillItem) {
   }
 
   feedback.value = "";
+  const deletingActiveSkill = skill.id === skillStore.activeSkillId;
 
   try {
     await skillStore.removeSkill(skill.id);
+    if (deletingActiveSkill) {
+      editorDirty.value = false;
+      panelMode.value = "view";
+    }
     feedback.value = t("skills.feedback.deleted", { name: skill.name });
   } catch {
     feedback.value = resolveActionError("skills.feedback.deleteFailed");
@@ -383,7 +279,7 @@ async function handleDeleteSkill(skill: SkillItem) {
             <span class="muted">{{ t("skills.libraryDescription") }}</span>
           </div>
           <div class="row" style="flex-wrap: wrap;">
-            <Button variant="secondary" :disabled="skillStore.isSaving || skillStore.isImporting" @click="router.push('/skills/new')">
+            <Button variant="secondary" :disabled="skillStore.isSaving || skillStore.isImporting" @click="enterCreateMode">
               {{ t("skills.createSkill") }}
             </Button>
             <input v-model="search" class="field skills-search" :placeholder="t('skills.searchPlaceholder')" />
@@ -432,12 +328,12 @@ async function handleDeleteSkill(skill: SkillItem) {
                 <span v-for="tag in resolveSkillTags(skill)" :key="`${skill.id}-${tag}`" class="skills-tag">{{ tag }}</span>
               </div>
 
-              <div class="row" style="justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-                <span class="muted">{{ t("skills.updatedAt", { value: formatTimestamp(skill.updatedAt, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) }}</span>
-                <div class="row" style="flex-wrap: wrap;">
-                  <Button variant="ghost" :disabled="skillStore.isSaving || skillStore.isImporting" @click.stop="handleEditSkill(skill.id)">
-                    {{ t("skills.editSkill") }}
-                  </Button>
+                <div class="row" style="justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                  <span class="muted">{{ t("skills.updatedAt", { value: formatTimestamp(skill.updatedAt, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) }}</span>
+                  <div class="row" style="flex-wrap: wrap;">
+                    <Button variant="ghost" :disabled="skillStore.isSaving || skillStore.isImporting" @click.stop="enterEditMode(skill.id)">
+                      {{ t("skills.editSkill") }}
+                    </Button>
                   <Button variant="secondary" :disabled="skillStore.isSaving || skillStore.isImporting" @click.stop="handleToggleSkill(skill)">
                     {{ skill.enabled ? t("skills.disable") : t("skills.enable") }}
                   </Button>
@@ -452,151 +348,24 @@ async function handleDeleteSkill(skill: SkillItem) {
       </section>
 
       <section class="panel skills-detail-panel">
-        <div class="stack" style="gap: 6px;">
-          <strong>{{ activeSkill ? t("skills.detailTitle", { name: activeSkill.name }) : t("skills.detailFallback") }}</strong>
-          <span class="muted">{{ t("skills.detailDescription") }}</span>
-        </div>
-
-        <div v-if="!activeSkill" class="empty-state">
-          <strong>{{ t("skills.selectSkillTitle") }}</strong>
-          <span class="muted">{{ t("skills.selectSkillDescription") }}</span>
-        </div>
-
-        <div v-else-if="!activeSkillDetail" class="empty-state">
-          <strong>{{ t("skills.loadingDetailTitle") }}</strong>
-          <span class="muted">{{ t("skills.loadingDetailDescription") }}</span>
-        </div>
-
-        <div v-else class="stack" style="gap: 16px; min-height: 0;">
-          <div class="skills-detail-meta">
-            <div class="stack" style="gap: 6px;">
-              <strong>{{ activeSkillDetail.skill.name }}</strong>
-              <span class="muted">{{ activeSkillDetail.skill.description }}</span>
-            </div>
-            <div class="skills-tags" v-if="activeTags.length > 0">
-              <span v-for="tag in activeTags" :key="tag" class="skills-tag">{{ tag }}</span>
-            </div>
-          </div>
-
-          <div class="skills-detail-grid">
-            <div class="summary-card summary-card--static">
-              <span class="muted">{{ t("skills.version") }}</span>
-              <strong>{{ activeSkillDetail.skill.version }}</strong>
-            </div>
-            <div class="summary-card summary-card--static">
-              <span class="muted">{{ t("skills.source") }}</span>
-              <strong>{{ resolveSourceLabel(activeSkillDetail.skill) }}</strong>
-            </div>
-            <div class="summary-card summary-card--static">
-              <span class="muted">{{ t("skills.slug") }}</span>
-              <strong>{{ activeSkillDetail.skill.slug }}</strong>
-            </div>
-            <div class="summary-card summary-card--static">
-              <span class="muted">{{ t("skills.fileCount") }}</span>
-              <strong>{{ detailFileStats.files }}</strong>
-            </div>
-            <div class="summary-card summary-card--static">
-              <span class="muted">{{ t("skills.folderCount") }}</span>
-              <strong>{{ detailFileStats.folders }}</strong>
-            </div>
-            <div class="summary-card summary-card--static">
-              <span class="muted">{{ t("skills.assetCount") }}</span>
-              <strong>{{ detailFileStats.assets }}</strong>
-            </div>
-          </div>
-
-          <div class="row" style="flex-wrap: wrap;">
-            <Button variant="secondary" :disabled="skillStore.isSaving" @click="handleEditSkill(activeSkillDetail.skill.id)">
-              {{ t("skills.editSkill") }}
-            </Button>
-            <Button variant="ghost" :disabled="skillStore.isSaving" @click="handleDuplicateSkill(activeSkillDetail.skill)">
-              {{ t("skills.duplicate") }}
-            </Button>
-            <Button variant="ghost" :disabled="skillStore.isSaving" @click="handleRefreshSkill(activeSkillDetail.skill)">
-              {{ t("skills.refresh") }}
-            </Button>
-            <Button variant="ghost" :disabled="skillStore.isExporting" @click="handleExportSkill(activeSkillDetail.skill)">
-              {{ t("skills.export") }}
-            </Button>
-            <Button variant="ghost" @click="handleOpenDirectory(activeSkillDetail.skill)">
-              {{ t("skills.openFolder") }}
-            </Button>
-          </div>
-
-          <div class="stack skills-paths" style="gap: 10px;">
-            <div class="stack" style="gap: 4px;">
-              <span class="muted">{{ t("skills.directoryPath") }}</span>
-              <code class="skills-path-block">{{ activeSkillDetail.directoryPath }}</code>
-            </div>
-            <div class="stack" style="gap: 4px;">
-              <span class="muted">{{ t("skills.manifestPath") }}</span>
-              <code class="skills-path-block">{{ activeSkillDetail.manifestPath }}</code>
-            </div>
-            <div v-if="activeSkillDetail.sourcePath" class="stack" style="gap: 4px;">
-              <span class="muted">{{ t("skills.sourcePath") }}</span>
-              <code class="skills-path-block">{{ activeSkillDetail.sourcePath }}</code>
-            </div>
-          </div>
-
-          <div class="skills-editor-layout">
-            <div class="skills-editor-layout__sidebar">
-              <SkillFileTree
-                :entries="activeSkillDetail.fileTree"
-                :selected-path="previewPath"
-                @select="handleSelectPreview"
-              />
-            </div>
-            <div class="skills-editor-layout__main">
-              <div class="stack" style="gap: 10px;">
-                <div class="stack" style="gap: 4px;">
-                  <strong>{{ previewEntry?.relativePath || t("skills.noFileSelected") }}</strong>
-                  <div class="row" style="flex-wrap: wrap; gap: 8px;">
-                    <span class="muted">
-                      {{
-                        previewEntry?.kind === "directory"
-                          ? t("skills.folderSelected")
-                          : previewEntry?.previewable
-                            ? t("skills.previewMode")
-                            : t("skills.fileBinary")
-                      }}
-                    </span>
-                    <span v-if="previewFileExtension" class="skills-inline-badge">{{ previewFileExtension }}</span>
-                    <span v-if="previewFileSizeLabel" class="skills-inline-badge">{{ previewFileSizeLabel }}</span>
-                  </div>
-                </div>
-
-                <div v-if="previewLoading" class="empty-state">
-                  <strong>{{ t("skills.loadingFileTitle") }}</strong>
-                  <span class="muted">{{ t("skills.loadingFileDescription") }}</span>
-                </div>
-                <div v-else-if="previewEntry?.kind === 'directory'" class="empty-state">
-                  <strong>{{ t("skills.folderSelectedTitle") }}</strong>
-                  <span class="muted">{{ t("skills.folderSelectedDescription") }}</span>
-                </div>
-                <div v-else-if="previewEntry?.kind === 'file' && !previewEntry.previewable" class="empty-state">
-                  <template v-if="previewAssetUrl">
-                    <div class="stack skills-asset-preview" style="gap: 12px;">
-                      <img :src="previewAssetUrl" :alt="previewEntry?.name || 'asset'" class="skills-asset-preview__image" />
-                      <div class="row" style="flex-wrap: wrap; gap: 8px;">
-                        <span class="skills-inline-badge">{{ t("skills.assetImage") }}</span>
-                        <span v-if="previewFileSizeLabel" class="skills-inline-badge">{{ previewFileSizeLabel }}</span>
-                      </div>
-                    </div>
-                  </template>
-                  <template v-else>
-                    <strong>{{ t("skills.binaryFileTitle") }}</strong>
-                    <span class="muted">{{ t("skills.binaryFileDescription") }}</span>
-                  </template>
-                </div>
-                <div v-else-if="!previewEntry" class="empty-state">
-                  <strong>{{ t("skills.noFileSelected") }}</strong>
-                  <span class="muted">{{ t("skills.noPreviewAvailableDescription") }}</span>
-                </div>
-                <pre v-else class="code-block skills-editor-preview">{{ previewContent || activeSkillDetail.markdownContent }}</pre>
-              </div>
-            </div>
-          </div>
-        </div>
+        <SkillEditorPanel
+          v-if="panelMode === 'create' || panelMode === 'edit'"
+          :key="editorPanelKey"
+          :mode="panelMode"
+          :skill-id="panelMode === 'edit' ? activeSkill?.id : undefined"
+          @cancel="handleEditorCancel"
+          @created="handleEditorCreated"
+          @dirty-change="editorDirty = $event"
+        />
+        <SkillDetailPanel
+          v-else
+          :skill="activeSkill"
+          @edit="activeSkill && enterEditMode(activeSkill.id)"
+          @duplicate="activeSkill && handleDuplicateSkill(activeSkill)"
+          @refresh="activeSkill && handleRefreshSkill(activeSkill)"
+          @export="activeSkill && handleExportSkill(activeSkill)"
+          @open-directory="activeSkill && handleOpenDirectory(activeSkill)"
+        />
       </section>
     </section>
 

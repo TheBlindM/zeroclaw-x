@@ -37,7 +37,9 @@ async function handleSubmit() {
     });
     router.push("/mcp");
   } catch {
-    feedback.value = t("mcp.feedback.createFailed");
+    if (!mcpStore.error) {
+      feedback.value = t("mcp.feedback.createFailed");
+    }
   }
 }
 </script>
