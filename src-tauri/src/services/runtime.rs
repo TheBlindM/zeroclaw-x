@@ -9,7 +9,8 @@ use tauri_plugin_dialog::DialogExt;
 use zeroclaw::{
     config::{
         runtime_proxy_config, set_runtime_proxy_config, AgentConfig, AutonomyConfig, Config,
-        McpConfig, McpServerConfig, McpTransport, ProxyConfig, ProxyScope,
+        DelegateAgentConfig, DelegateToolConfig, McpConfig, McpServerConfig, McpTransport,
+        ProxyConfig, ProxyScope,
     },
     providers::{self, ChatMessage, Provider, ProviderRuntimeOptions},
 };
@@ -23,7 +24,8 @@ use crate::{
             RuntimeAutonomyLevelRecord, RuntimeConnectionReport, RuntimeProfileRecord,
             RuntimeProfilesExportReport, RuntimeProfilesImportReport, RuntimeProfilesState,
             RuntimeProxyScopeRecord, RuntimeProxySettingsRecord, RuntimeProxySupportRecord,
-            RuntimeSettingsRecord, RuntimeStatusRecord,
+            RuntimeSettingsRecord, RuntimeStatusRecord, RuntimeProviderEntryRecord,
+            RuntimeProviderGroupRecord, RuntimeCredentialModeRecord,
         },
     },
 };
@@ -45,6 +47,14 @@ pub fn build_runtime_session(
 ) -> Result<RuntimeSession, String> {
     let settings = load_runtime_settings(settings_path)?;
     build_runtime_session_from_settings(db_path, settings)
+}
+
+pub fn build_agent_runtime_session(
+    db_path: &PathBuf,
+    settings_path: &Path,
+) -> Result<RuntimeSession, String> {
+    let settings = load_runtime_settings(settings_path)?;
+    build_agent_runtime_session_from_settings(db_path, settings)
 }
 
 pub fn get_runtime_status(
@@ -408,6 +418,60 @@ fn build_runtime_session_from_settings(
     })
 }
 
+fn build_agent_runtime_session_from_settings(
+    db_path: &PathBuf,
+    settings: RuntimeSettingsRecord,
+) -> Result<RuntimeSession, String> {
+    let normalized_settings = settings.normalized();
+    let config = build_resolved_runtime_config(db_path, normalized_settings.clone())?;
+    let entry = resolve_runtime_entry_binding(
+        &normalized_settings.groups,
+        &normalized_settings.agent.runtime_group_id,
+        &normalized_settings.agent.runtime_entry_id,
+    )
+    .unwrap_or_else(|| RuntimeProviderEntryRecord {
+        id: "primary".to_string(),
+        name: String::new(),
+        provider: normalized_settings.provider.clone(),
+        model: normalized_settings.model.clone(),
+        provider_url: normalized_settings.provider_url.clone(),
+        api_key: normalized_settings.api_key.clone(),
+        credential_mode: normalized_settings.credential_mode,
+        auth_profile: normalized_settings.auth_profile.clone(),
+        temperature: normalized_settings.temperature,
+    });
+
+    let provider_name = entry.provider.clone();
+    let model = entry.model.clone();
+    let mut options: ProviderRuntimeOptions =
+        providers::provider_runtime_options_from_config(&config);
+    if entry.credential_mode == RuntimeCredentialModeRecord::AuthProfile
+        && supports_auth_profile_override(&provider_name)
+        && !entry.auth_profile.is_empty()
+    {
+        options.auth_profile_override = Some(entry.auth_profile.clone());
+    }
+    let provider = providers::create_routed_provider_with_options(
+        &provider_name,
+        non_empty_string(entry.api_key).as_deref().or(config.api_key.as_deref()),
+        non_empty_string(entry.provider_url)
+            .as_deref()
+            .or(config.api_url.as_deref()),
+        &config.reliability,
+        &config.model_routes,
+        &model,
+        &options,
+    )
+    .map_err(|error| providers::sanitize_api_error(&error.to_string()))?;
+
+    Ok(RuntimeSession {
+        provider,
+        provider_name,
+        model,
+        temperature: entry.temperature,
+    })
+}
+
 pub(crate) fn build_resolved_runtime_config(
     db_path: &PathBuf,
     settings: RuntimeSettingsRecord,
@@ -480,12 +544,16 @@ fn build_runtime_config(
         auth_profile: _,
         temperature,
         proxy: _,
+        delegate,
+        agents,
         agent,
         autonomy,
     } = settings;
 
     fs::create_dir_all(&runtime_root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&workspace_dir).map_err(|error| error.to_string())?;
+
+    let delegate_agents = build_delegate_agents(&settings.groups, agents);
 
     let mut config = Config::default();
     config.workspace_dir = workspace_dir;
@@ -494,6 +562,8 @@ fn build_runtime_config(
     config.default_model = Some(model);
     config.default_temperature = temperature;
     config.proxy = build_runtime_proxy_config(runtime_proxy);
+    config.delegate = build_delegate_config(delegate);
+    config.agents = delegate_agents;
     config.agent = build_agent_config(agent);
     config.autonomy = build_autonomy_config(autonomy);
 
@@ -657,6 +727,104 @@ fn build_agent_config(
         tool_dispatcher: settings.tool_dispatcher,
         ..AgentConfig::default()
     }
+}
+
+fn build_delegate_config(
+    settings: crate::models::settings::RuntimeDelegateSettingsRecord,
+) -> DelegateToolConfig {
+    let settings = settings.normalized();
+
+    DelegateToolConfig {
+        timeout_secs: settings.timeout_secs,
+        agentic_timeout_secs: settings.agentic_timeout_secs,
+    }
+}
+
+fn build_delegate_agents(
+    groups: &[RuntimeProviderGroupRecord],
+    settings: Vec<crate::models::settings::RuntimeDelegateAgentRecord>,
+) -> HashMap<String, DelegateAgentConfig> {
+    settings
+        .into_iter()
+        .filter_map(|record| {
+            let normalized = record.normalized();
+            if !normalized.enabled {
+                return None;
+            }
+
+            let runtime_entry = resolve_runtime_entry_binding(
+                groups,
+                &normalized.runtime_group_id,
+                &normalized.runtime_entry_id,
+            );
+            let provider = runtime_entry
+                .as_ref()
+                .map(|entry| entry.provider.clone())
+                .unwrap_or_else(|| normalized.provider.clone());
+            let model = runtime_entry
+                .as_ref()
+                .map(|entry| entry.model.clone())
+                .unwrap_or_else(|| normalized.model.clone());
+            let api_key = runtime_entry
+                .as_ref()
+                .and_then(|entry| non_empty_string(entry.api_key.clone()))
+                .or(normalized.api_key.clone());
+            let provider_api_url = runtime_entry
+                .as_ref()
+                .and_then(|entry| non_empty_string(entry.provider_url.clone()));
+            let auth_profile_override = runtime_entry.as_ref().and_then(|entry| {
+                if entry.credential_mode == RuntimeCredentialModeRecord::AuthProfile {
+                    non_empty_string(entry.auth_profile.clone())
+                } else {
+                    None
+                }
+            });
+            let temperature = runtime_entry
+                .as_ref()
+                .map(|entry| entry.temperature)
+                .or(normalized.temperature);
+
+            Some((
+                normalized.name.clone(),
+                DelegateAgentConfig {
+                    provider,
+                    model,
+                    provider_api_url,
+                    system_prompt: normalized.system_prompt,
+                    api_key,
+                    auth_profile_override,
+                    temperature,
+                    max_depth: normalized.max_depth,
+                    agentic: normalized.agentic,
+                    allowed_tools: normalized.allowed_tools,
+                    max_iterations: normalized.max_iterations,
+                    timeout_secs: normalized.timeout_secs,
+                    agentic_timeout_secs: normalized.agentic_timeout_secs,
+                    skills_directory: normalized.skills_directory,
+                    memory_namespace: normalized.memory_namespace,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn resolve_runtime_entry_binding(
+    groups: &[RuntimeProviderGroupRecord],
+    group_id: &str,
+    entry_id: &str,
+) -> Option<RuntimeProviderEntryRecord> {
+    let fallback_group = groups.first()?;
+    let group = groups
+        .iter()
+        .find(|group| group.id == group_id.trim())
+        .unwrap_or(fallback_group);
+    group
+        .entries
+        .iter()
+        .find(|entry| entry.id == entry_id.trim())
+        .or_else(|| group.active_entry())
+        .or_else(|| group.entries.first())
+        .cloned()
 }
 
 fn build_autonomy_config(

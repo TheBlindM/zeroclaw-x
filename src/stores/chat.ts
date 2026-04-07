@@ -12,6 +12,7 @@ import {
   type ChatApprovalDecision,
   type ChatApprovalRequestPayload,
   type ChatContextPayload,
+  type ChatDelegateEventPayload,
   type MessageRecord,
   type SessionKnowledgeScopeRecord,
   type SessionRecord
@@ -135,6 +136,9 @@ export const useChatStore = defineStore("chat", {
     contextPreviews: {} as Record<string, ChatContextPayload | null>,
     knowledgeScopes: {} as Record<string, SessionKnowledgeScopeRecord>,
     pendingApprovals: {} as Record<string, ChatApprovalRequestPayload[]>,
+    delegateEvents: {} as Record<string, ChatDelegateEventPayload[]>,
+    dismissedDelegateEventIds: {} as Record<string, string[]>,
+    delegatePanelExpanded: {} as Record<string, boolean>,
     agentModes: {} as Record<string, boolean>,
     loadedSessionIds: [] as string[],
     hasBootstrapped: false,
@@ -165,6 +169,41 @@ export const useChatStore = defineStore("chat", {
         return;
       }
       this.pendingApprovals[payload.session_id] = [...list, payload];
+    },
+    upsertDelegateEvent(payload: ChatDelegateEventPayload) {
+      const list = this.delegateEvents[payload.session_id] ?? [];
+      const index = list.findIndex((item) => item.event_id === payload.event_id);
+      if (index === -1) {
+        this.delegateEvents[payload.session_id] = [...list, payload];
+        const activeItems = this.delegateEvents[payload.session_id].filter(
+          (item) => item.status === "started" && !(this.dismissedDelegateEventIds[payload.session_id] ?? []).includes(item.event_id)
+        );
+        if (activeItems.length > 0) {
+          this.delegatePanelExpanded[payload.session_id] ??= false;
+        }
+        return;
+      }
+
+      const next = [...list];
+      next[index] = payload;
+      this.delegateEvents[payload.session_id] = next;
+    },
+    clearDelegateEvents(sessionId: string) {
+      this.delegateEvents[sessionId] = [];
+      this.dismissedDelegateEventIds[sessionId] = [];
+      this.delegatePanelExpanded[sessionId] = false;
+    },
+    dismissDelegateEvent(sessionId: string, eventId: string) {
+      const current = new Set(this.dismissedDelegateEventIds[sessionId] ?? []);
+      current.add(eventId);
+      this.dismissedDelegateEventIds[sessionId] = Array.from(current);
+    },
+    dismissAllDelegateEvents(sessionId: string) {
+      this.dismissedDelegateEventIds[sessionId] = (this.delegateEvents[sessionId] ?? []).map((item) => item.event_id);
+      this.delegatePanelExpanded[sessionId] = false;
+    },
+    setDelegatePanelExpanded(sessionId: string, expanded: boolean) {
+      this.delegatePanelExpanded[sessionId] = expanded;
     },
     clearSessionApprovals(sessionId: string) {
       this.pendingApprovals[sessionId] = [];
@@ -271,6 +310,9 @@ export const useChatStore = defineStore("chat", {
         this.contextPreviews = {};
         this.knowledgeScopes = {};
         this.pendingApprovals = {};
+        this.delegateEvents = {};
+        this.dismissedDelegateEventIds = {};
+        this.delegatePanelExpanded = {};
         this.agentModes = Object.fromEntries(records.map((record) => [record.id, record.agent_mode]));
         this.loadedSessionIds = [];
         this.sortSessions();
@@ -313,6 +355,9 @@ export const useChatStore = defineStore("chat", {
       this.contextPreviews[session.id] = null;
       this.knowledgeScopes[session.id] = createDefaultKnowledgeScope(session.id);
       this.pendingApprovals[session.id] = [];
+      this.delegateEvents[session.id] = [];
+      this.dismissedDelegateEventIds[session.id] = [];
+      this.delegatePanelExpanded[session.id] = false;
       this.agentModes[session.id] = false;
       if (!this.loadedSessionIds.includes(session.id)) {
         this.loadedSessionIds.push(session.id);
@@ -397,6 +442,9 @@ export const useChatStore = defineStore("chat", {
       delete this.contextPreviews[sessionId];
       delete this.knowledgeScopes[sessionId];
       delete this.pendingApprovals[sessionId];
+      delete this.delegateEvents[sessionId];
+      delete this.dismissedDelegateEventIds[sessionId];
+      delete this.delegatePanelExpanded[sessionId];
       delete this.agentModes[sessionId];
       this.loadedSessionIds = this.loadedSessionIds.filter((item) => item !== sessionId);
 
@@ -419,6 +467,9 @@ export const useChatStore = defineStore("chat", {
     async loadSessionMessages(sessionId: string) {
       this.drafts[sessionId] ??= "";
       this.pendingApprovals[sessionId] ??= [];
+      this.delegateEvents[sessionId] ??= [];
+      this.dismissedDelegateEventIds[sessionId] ??= [];
+      this.delegatePanelExpanded[sessionId] ??= false;
       this.agentModes[sessionId] ??= false;
 
       if (this.loadedSessionIds.includes(sessionId)) {
@@ -449,6 +500,9 @@ export const useChatStore = defineStore("chat", {
       }
       this.knowledgeScopes[sessionId] ??= createDefaultKnowledgeScope(sessionId);
       this.pendingApprovals[sessionId] ??= [];
+      this.delegateEvents[sessionId] ??= [];
+      this.dismissedDelegateEventIds[sessionId] ??= [];
+      this.delegatePanelExpanded[sessionId] ??= false;
       this.agentModes[sessionId] ??= false;
       const session = this.findSession(sessionId);
       if (session && session.title === "New session") {
@@ -468,8 +522,12 @@ export const useChatStore = defineStore("chat", {
       this.messages[sessionId].push(entry);
       this.clearContextPreview(sessionId);
       this.clearSessionApprovals(sessionId);
+      this.clearDelegateEvents(sessionId);
       this.knowledgeScopes[sessionId] ??= createDefaultKnowledgeScope(sessionId);
       this.pendingApprovals[sessionId] ??= [];
+      this.delegateEvents[sessionId] ??= [];
+      this.dismissedDelegateEventIds[sessionId] ??= [];
+      this.delegatePanelExpanded[sessionId] ??= false;
       this.agentModes[sessionId] ??= false;
       if (!this.loadedSessionIds.includes(sessionId)) {
         this.loadedSessionIds.push(sessionId);

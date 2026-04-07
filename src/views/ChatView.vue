@@ -56,9 +56,32 @@ const activeKnowledgeScope = computed(() => {
 const activePendingApprovals = computed(() =>
   activeSessionId.value ? chatStore.pendingApprovals[activeSessionId.value] ?? [] : []
 );
+const activeDelegateEvents = computed(() =>
+  activeSessionId.value ? chatStore.delegateEvents[activeSessionId.value] ?? [] : []
+);
+const activeDismissedDelegateEventIds = computed(() =>
+  activeSessionId.value ? new Set(chatStore.dismissedDelegateEventIds[activeSessionId.value] ?? []) : new Set<string>()
+);
+const isDelegatePanelExpanded = computed(() =>
+  activeSessionId.value ? chatStore.delegatePanelExpanded[activeSessionId.value] ?? false : false
+);
+const visibleDelegateEvents = computed(() =>
+  activeDelegateEvents.value.filter((item) => !activeDismissedDelegateEventIds.value.has(item.event_id))
+);
+const runningDelegateEvents = computed(() =>
+  visibleDelegateEvents.value.filter((item) => item.status === "started")
+);
+const finishedDelegateEvents = computed(() =>
+  visibleDelegateEvents.value.filter((item) => item.status !== "started")
+);
+const delegateDetailEvents = computed(() =>
+  isDelegatePanelExpanded.value ? visibleDelegateEvents.value : runningDelegateEvents.value
+);
+const shouldShowDelegateBar = computed(() => visibleDelegateEvents.value.length > 0);
 const activeAgentMode = computed(() =>
   activeSessionId.value ? chatStore.agentModes[activeSessionId.value] ?? false : false
 );
+const isMainAgentEnabled = computed(() => settingsStore.runtime.agent.enabled);
 const activeDraft = computed(() => {
   const sessionId = activeSessionId.value;
   return sessionId ? drafts.value[sessionId] ?? "" : "";
@@ -133,6 +156,51 @@ const runtimePolicy = computed(() => {
   }
 
   return parts.join(" / ");
+});
+
+function resolveDelegateTitle(agentNames: string[]) {
+  if (agentNames.length <= 1) {
+    return t("chat.delegateSingleAgent", { agent: agentNames[0] ?? t("chat.delegateUnknownAgent") });
+  }
+
+  return t("chat.delegateMultipleAgents", { count: agentNames.length });
+}
+
+function resolveDelegateStatus(status: "started" | "completed" | "failed") {
+  return t(`chat.delegateStatuses.${status}`);
+}
+
+function resolveDelegateCardClass(status: "started" | "completed" | "failed") {
+  return `delegate-card--${status}`;
+}
+
+const delegateSummaryText = computed(() => {
+  const running = runningDelegateEvents.value.length;
+  const finished = finishedDelegateEvents.value.length;
+
+  if (running > 0 && finished > 0) {
+    return t("chat.delegateSummaryMixed", { running, finished });
+  }
+
+  if (running > 0) {
+    return t("chat.delegateSummaryRunning", { count: running });
+  }
+
+  const failed = finishedDelegateEvents.value.filter((item) => item.status === "failed").length;
+  if (failed > 0) {
+    return t("chat.delegateSummaryFailed", { count: failed });
+  }
+
+  return t("chat.delegateSummaryCompleted", { count: finished });
+});
+
+const delegateMetaText = computed(() => {
+  const latest = visibleDelegateEvents.value[visibleDelegateEvents.value.length - 1];
+  if (!latest) {
+    return "";
+  }
+
+  return latest.error || latest.result_summary || latest.prompt_summary;
 });
 
 function highlightMatches(text: string | null | undefined) {
@@ -258,7 +326,7 @@ onMounted(async () => {
     await Promise.all([
       chatStore.bootstrap(),
       projectsStore.loaded ? Promise.resolve() : projectsStore.bootstrap(),
-      settingsStore.statusLoaded ? Promise.resolve() : settingsStore.refreshStatus()
+      settingsStore.loaded ? Promise.resolve() : settingsStore.bootstrap()
     ]);
   } catch (error) {
     console.error("Failed to bootstrap chat state", error);
@@ -449,6 +517,11 @@ function handleToggleAgentMode() {
     return;
   }
 
+  if (!activeAgentMode.value && !isMainAgentEnabled.value) {
+    approvalFeedback.value = t("chat.feedback.agentDisabled");
+    return;
+  }
+
   approvalFeedback.value = "";
   chatStore.saveAgentMode(activeSessionId.value, !activeAgentMode.value).catch((error) => {
     console.error("Failed to update agent mode", error);
@@ -476,6 +549,30 @@ async function handleRespondToApproval(requestId: string, decision: "yes" | "no"
 function handleDraftChange(content: string) {
   const sessionId = chatStore.ensureSession();
   chatStore.setSessionDraft(sessionId, content);
+}
+
+function handleToggleDelegatePanel() {
+  if (!activeSessionId.value) {
+    return;
+  }
+
+  chatStore.setDelegatePanelExpanded(activeSessionId.value, !isDelegatePanelExpanded.value);
+}
+
+function handleDismissDelegateEvent(eventId: string) {
+  if (!activeSessionId.value) {
+    return;
+  }
+
+  chatStore.dismissDelegateEvent(activeSessionId.value, eventId);
+}
+
+function handleDismissAllDelegates() {
+  if (!activeSessionId.value) {
+    return;
+  }
+
+  chatStore.dismissAllDelegateEvents(activeSessionId.value);
 }
 </script>
 
@@ -625,7 +722,11 @@ function handleDraftChange(content: string) {
                   </Button>
                 </div>
               </div>
-              <Button :variant="activeAgentMode ? 'primary' : 'secondary'" :disabled="isStreaming || !activeSessionId" @click="handleToggleAgentMode()">
+              <Button
+                :variant="activeAgentMode ? 'primary' : 'secondary'"
+                :disabled="isStreaming || !activeSessionId || (!isMainAgentEnabled && !activeAgentMode)"
+                @click="handleToggleAgentMode()"
+              >
                 <Bot :size="16" />
                 {{ activeAgentMode ? t("chat.agentEnabled") : t("chat.enableAgent") }}
               </Button>
@@ -633,7 +734,10 @@ function handleDraftChange(content: string) {
             </div>
           </div>
 
-          <div class="chat-room__stream panel">
+          <div
+            class="chat-room__stream panel"
+            :class="{ 'chat-room__stream--floating-panels': shouldShowDelegateBar || activePendingApprovals.length > 0 }"
+          >
             <EmptyState
               v-if="isBootstrapping"
               :title="t('chat.loadingHistoryTitle')"
@@ -651,35 +755,84 @@ function handleDraftChange(content: string) {
             class="chat-room__composer-stack"
             :class="{ 'chat-room__composer-stack--approval': activePendingApprovals.length > 0 }"
           >
-            <div v-if="activePendingApprovals.length > 0" class="panel approval-panel approval-panel--composer">
-              <div class="stack chat-panel__stack">
-                <div class="chat-panel__header row">
-                  <div class="stack chat-panel__copy">
-                    <span class="eyebrow">{{ t("chat.approvalEyebrow") }}</span>
-                    <strong>{{ t("chat.pendingCalls", { count: activePendingApprovals.length }) }}</strong>
-                    <span class="muted">{{ t("chat.approvalDescription") }}</span>
+            <div v-if="shouldShowDelegateBar || activePendingApprovals.length > 0" class="chat-room__floating-stack">
+              <div v-if="shouldShowDelegateBar" class="panel delegate-summary-panel">
+                <div class="stack chat-panel__stack">
+                  <div class="chat-panel__header row">
+                    <div class="stack chat-panel__copy">
+                      <span class="eyebrow">{{ t("chat.delegateEyebrow") }}</span>
+                      <strong>{{ delegateSummaryText }}</strong>
+                      <span class="muted">{{ delegateMetaText }}</span>
+                    </div>
+                    <div class="row chat-panel__actions">
+                      <Button variant="ghost" @click="handleToggleDelegatePanel()">
+                        {{ isDelegatePanelExpanded ? t("chat.hideDelegateDetails") : t("chat.showDelegateDetails") }}
+                      </Button>
+                      <Button variant="ghost" @click="handleDismissAllDelegates()">
+                        <X :size="14" />
+                        {{ t("chat.close") }}
+                      </Button>
+                    </div>
                   </div>
-                  <span class="session-project-chip">{{ t("chat.waitingForYou") }}</span>
-                </div>
-                <span v-if="approvalFeedback" class="muted">{{ approvalFeedback }}</span>
-                <div class="approval-list">
-                  <article v-for="approval in activePendingApprovals" :key="approval.request_id" class="approval-card">
-                    <div class="stack chat-panel__card-stack">
-                      <div class="row chat-panel__card-header">
-                        <strong>{{ approval.tool_name }}</strong>
-                        <span class="approval-chip">
-                          <ShieldCheck :size="14" />
-                          {{ t("chat.approvalRequired") }}
-                        </span>
+                  <div v-if="delegateDetailEvents.length > 0" class="delegate-inline-list">
+                    <article
+                      v-for="delegateEvent in delegateDetailEvents"
+                      :key="delegateEvent.event_id"
+                      class="delegate-inline-card"
+                      :class="resolveDelegateCardClass(delegateEvent.status)"
+                    >
+                      <div class="stack chat-panel__card-stack">
+                        <div class="row chat-panel__card-header">
+                          <strong>{{ resolveDelegateTitle(delegateEvent.agent_names) }}</strong>
+                          <span class="approval-chip delegate-chip">
+                            {{ resolveDelegateStatus(delegateEvent.status) }}
+                          </span>
+                        </div>
+                        <p class="approval-card__summary">{{ delegateEvent.prompt_summary }}</p>
+                        <p v-if="delegateEvent.result_summary" class="approval-card__summary">{{ delegateEvent.result_summary }}</p>
+                        <p v-if="delegateEvent.error" class="approval-card__summary settings-error">{{ delegateEvent.error }}</p>
                       </div>
-                      <p class="approval-card__summary">{{ approval.arguments_summary }}</p>
+                      <button class="delegate-inline-card__close" type="button" @click="handleDismissDelegateEvent(delegateEvent.event_id)">
+                        <X :size="14" />
+                      </button>
+                    </article>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="activePendingApprovals.length > 0" class="panel approval-panel approval-panel--composer">
+                <div class="stack chat-panel__stack">
+                  <div class="chat-panel__header row">
+                    <div class="stack chat-panel__copy">
+                      <span class="eyebrow">{{ t("chat.approvalEyebrow") }}</span>
+                      <strong>{{ t("chat.pendingCalls", { count: activePendingApprovals.length }) }}</strong>
+                      <span class="muted">{{ t("chat.approvalDescription") }}</span>
                     </div>
-                    <div class="row approval-actions">
-                      <Button variant="ghost" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'no')">{{ t("chat.deny") }}</Button>
-                      <Button variant="secondary" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'yes')">{{ t("chat.approveOnce") }}</Button>
-                      <Button :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'always')">{{ t("chat.alwaysAllow") }}</Button>
-                    </div>
-                  </article>
+                    <span class="session-project-chip">{{ t("chat.waitingForYou") }}</span>
+                  </div>
+                  <span v-if="approvalFeedback" class="muted">{{ approvalFeedback }}</span>
+                  <div class="approval-list">
+                    <article v-for="approval in activePendingApprovals" :key="approval.request_id" class="approval-card">
+                      <div class="stack chat-panel__card-stack">
+                        <div class="row chat-panel__card-header">
+                          <strong>{{ approval.tool_name }}</strong>
+                          <span class="approval-chip">
+                            <ShieldCheck :size="14" />
+                            {{ t("chat.approvalRequired") }}
+                          </span>
+                        </div>
+                        <p v-if="approval.requested_by" class="approval-card__summary">
+                          {{ t("chat.approvalRequestedBy", { agent: approval.requested_by }) }}
+                        </p>
+                        <p class="approval-card__summary">{{ approval.arguments_summary }}</p>
+                      </div>
+                      <div class="row approval-actions">
+                        <Button variant="ghost" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'no')">{{ t("chat.deny") }}</Button>
+                        <Button variant="secondary" :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'yes')">{{ t("chat.approveOnce") }}</Button>
+                        <Button :disabled="isBootstrapping" @click="handleRespondToApproval(approval.request_id, 'always')">{{ t("chat.alwaysAllow") }}</Button>
+                      </div>
+                    </article>
+                  </div>
                 </div>
               </div>
             </div>

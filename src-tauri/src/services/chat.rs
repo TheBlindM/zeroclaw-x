@@ -4,7 +4,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::Command,
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Result as AnyhowResult};
@@ -19,16 +19,22 @@ use zeroclaw::{
     },
     memory::{self, Memory},
     observability::{self, Observer},
-    providers::{traits::StreamOptions, ChatMessage, Provider},
-    tools::{McpRegistry, McpToolWrapper, Tool, ToolResult},
+    providers::{
+        provider_runtime_options_from_config, traits::StreamOptions, ChatMessage, Provider,
+    },
+    tools::{
+        DelegateParentToolsHandle, DelegateTool, McpRegistry, McpToolWrapper, Tool, ToolResult,
+    },
+    SecurityPolicy,
 };
 
 use crate::{
     db,
     models::{
         chat::{
-            ChatApprovalDecision, ChatApprovalRequestPayload, ChatContextPayload, ChatDonePayload,
-            ChatTokenPayload, MessageRecord,
+            ChatApprovalDecision, ChatApprovalRequestPayload, ChatContextPayload,
+            ChatDelegateEventPayload, ChatDelegateStatus, ChatDonePayload, ChatTokenPayload,
+            MessageRecord,
         },
         knowledge::KnowledgeDocumentRecord,
     },
@@ -50,6 +56,10 @@ const BUILTIN_AGENT_TOOLS: &[&str] = &[
     "content_search",
 ];
 
+tokio::task_local! {
+    static ACTIVE_DELEGATE_AGENT: String;
+}
+
 #[derive(Clone)]
 struct ProjectContextSelection {
     system_context: String,
@@ -66,6 +76,32 @@ struct ApprovalWrappingTool {
     skip_default_approval: bool,
     auto_approve: HashSet<String>,
     always_ask: HashSet<String>,
+}
+
+struct SharedToolAdapter {
+    inner: Arc<dyn Tool>,
+}
+
+impl SharedToolAdapter {
+    fn new(inner: Arc<dyn Tool>) -> Self {
+        Self { inner }
+    }
+}
+
+struct DelegateEventWrappingTool {
+    inner: DelegateTool,
+    app: AppHandle,
+    session_id: String,
+}
+
+impl DelegateEventWrappingTool {
+    fn new(inner: DelegateTool, app: AppHandle, session_id: String) -> Self {
+        Self {
+            inner,
+            app,
+            session_id,
+        }
+    }
 }
 
 impl ApprovalWrappingTool {
@@ -133,9 +169,15 @@ impl Tool for ApprovalWrappingTool {
 
         if self.should_request_approval(&tool_name) {
             let summary = summarize_args(&effective_args);
+            let requested_by = current_delegate_actor();
             let (payload, receiver) = self
                 .state
-                .register_approval_request(&self.session_id, &tool_name, &summary)
+                .register_approval_request(
+                    &self.session_id,
+                    &tool_name,
+                    &summary,
+                    requested_by.as_deref(),
+                )
                 .map_err(anyhow::Error::msg)?;
 
             emit_approval_request(&self.app, &payload).map_err(anyhow::Error::msg)?;
@@ -157,6 +199,127 @@ impl Tool for ApprovalWrappingTool {
         }
 
         self.inner.execute(effective_args).await
+    }
+}
+
+#[async_trait]
+impl Tool for SharedToolAdapter {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        self.inner.parameters_schema()
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> AnyhowResult<ToolResult> {
+        self.inner.execute(args).await
+    }
+}
+
+#[async_trait]
+impl Tool for DelegateEventWrappingTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        self.inner.parameters_schema()
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> AnyhowResult<ToolResult> {
+        let preview = build_delegate_event_preview(&self.session_id, &args);
+
+        if let Some(preview) = &preview {
+            emit_delegate_event(
+                &self.app,
+                &ChatDelegateEventPayload {
+                    event_id: preview.event_id.clone(),
+                    session_id: self.session_id.clone(),
+                    status: ChatDelegateStatus::Started,
+                    agent_names: preview.agent_names.clone(),
+                    prompt_summary: preview.prompt_summary.clone(),
+                    result_summary: None,
+                    error: None,
+                    background: preview.background,
+                    parallel: preview.parallel,
+                    updated_at: current_timestamp(),
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
+
+        let result = if let Some(preview) = &preview {
+            if let Some(agent_name) = &preview.active_agent_name {
+                ACTIVE_DELEGATE_AGENT
+                    .scope(agent_name.clone(), self.inner.execute(args))
+                    .await
+            } else {
+                self.inner.execute(args).await
+            }
+        } else {
+            self.inner.execute(args).await
+        };
+
+        if let Some(preview) = preview {
+            match &result {
+                Ok(tool_result) => {
+                    emit_delegate_event(
+                        &self.app,
+                        &ChatDelegateEventPayload {
+                            event_id: preview.event_id,
+                            session_id: self.session_id.clone(),
+                            status: if tool_result.success {
+                                ChatDelegateStatus::Completed
+                            } else {
+                                ChatDelegateStatus::Failed
+                            },
+                            agent_names: preview.agent_names,
+                            prompt_summary: preview.prompt_summary,
+                            result_summary: tool_result
+                                .success
+                                .then(|| truncate_preview_text(&tool_result.output, 220)),
+                            error: tool_result
+                                .error
+                                .as_ref()
+                                .map(|value| truncate_preview_text(value, 220)),
+                            background: preview.background,
+                            parallel: preview.parallel,
+                            updated_at: current_timestamp(),
+                        },
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                }
+                Err(error) => {
+                    emit_delegate_event(
+                        &self.app,
+                        &ChatDelegateEventPayload {
+                            event_id: preview.event_id,
+                            session_id: self.session_id.clone(),
+                            status: ChatDelegateStatus::Failed,
+                            agent_names: preview.agent_names,
+                            prompt_summary: preview.prompt_summary,
+                            result_summary: None,
+                            error: Some(truncate_preview_text(&error.to_string(), 220)),
+                            background: preview.background,
+                            parallel: preview.parallel,
+                            updated_at: current_timestamp(),
+                        },
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                }
+            }
+        }
+
+        result
     }
 }
 
@@ -261,11 +424,14 @@ async fn stream_agent_response(
     let db_path = state.db_path();
     let settings_path = state.settings_path();
     let settings = super::runtime::load_runtime_settings(&settings_path)?;
+    if !settings.agent.enabled {
+        return Err("Main agent is disabled in Settings > Agent.".to_string());
+    }
     let config = super::runtime::build_resolved_runtime_config(&db_path, settings)?;
     let records = db::list_messages(&db_path, &session_id)?;
     let (history_seed, effective_user_input, context_preview) =
         build_agent_turn_input(&db_path, &session_id, &content, &records)?;
-    let runtime_session = super::runtime::build_runtime_session(&db_path, &settings_path)?;
+    let runtime_session = super::runtime::build_agent_runtime_session(&db_path, &settings_path)?;
     let mut agent = build_agent_for_session(
         &app,
         &state,
@@ -324,20 +490,50 @@ async fn build_agent_for_session(
         )
         .map_err(|error| error.to_string())?,
     );
-    let (session_tools, allowed_tool_names) =
+    let (session_tools, mut allowed_tool_names) =
         build_session_tools(&config.workspace_dir, &config.mcp).await?;
-    let wrapped_tools = wrap_tools_for_session(
+    let mut wrapped_tools = wrap_tools_for_session(
         session_tools,
         app.clone(),
         state.clone(),
         session_id,
         &config.autonomy,
     );
+    if !config.agents.is_empty() {
+        let parent_tools: DelegateParentToolsHandle = Default::default();
+        *parent_tools.write() = wrapped_tools.clone();
+        let delegate_tool = DelegateTool::new_with_options(
+            config.agents.clone(),
+            config.api_key.clone(),
+            Arc::new(SecurityPolicy::from_config(
+                &config.autonomy,
+                &config.workspace_dir,
+            )),
+            provider_runtime_options_from_config(config),
+        )
+        .with_parent_tools(parent_tools)
+        .with_multimodal_config(config.multimodal.clone())
+        .with_delegate_config(config.delegate.clone())
+        .with_workspace_dir(config.workspace_dir.clone())
+        .with_memory(memory.clone());
+
+        wrapped_tools.push(Arc::new(DelegateEventWrappingTool::new(
+            delegate_tool,
+            app.clone(),
+            session_id.to_string(),
+        )));
+        allowed_tool_names.push("delegate".to_string());
+    }
+
     let tool_dispatcher = select_tool_dispatcher(config, provider.as_ref());
+    let boxed_tools = wrapped_tools
+        .into_iter()
+        .map(|tool| Box::new(SharedToolAdapter::new(tool)) as Box<dyn Tool>)
+        .collect::<Vec<_>>();
 
     Agent::builder()
         .provider(provider)
-        .tools(wrapped_tools)
+        .tools(boxed_tools)
         .memory(memory)
         .observer(observer)
         .tool_dispatcher(tool_dispatcher)
@@ -413,7 +609,7 @@ fn wrap_tools_for_session(
     state: AppState,
     session_id: &str,
     autonomy: &zeroclaw::config::AutonomyConfig,
-) -> Vec<Box<dyn Tool>> {
+) -> Vec<Arc<dyn Tool>> {
     let auto_approve = autonomy
         .auto_approve
         .iter()
@@ -424,7 +620,7 @@ fn wrap_tools_for_session(
     tools_registry
         .into_iter()
         .map(|tool| {
-            Box::new(ApprovalWrappingTool::new(
+            Arc::new(ApprovalWrappingTool::new(
                 tool,
                 app.clone(),
                 state.clone(),
@@ -432,7 +628,7 @@ fn wrap_tools_for_session(
                 autonomy_level_skips_default_approval(autonomy),
                 auto_approve.clone(),
                 always_ask.clone(),
-            )) as Box<dyn Tool>
+            )) as Arc<dyn Tool>
         })
         .collect()
 }
@@ -1299,12 +1495,106 @@ fn summarize_args(args: &serde_json::Value) -> String {
     }
 }
 
+struct DelegateEventPreview {
+    event_id: String,
+    agent_names: Vec<String>,
+    prompt_summary: String,
+    background: bool,
+    parallel: bool,
+    active_agent_name: Option<String>,
+}
+
+fn build_delegate_event_preview(
+    _session_id: &str,
+    args: &serde_json::Value,
+) -> Option<DelegateEventPreview> {
+    let action = args
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("delegate");
+    if action != "delegate" {
+        return None;
+    }
+
+    let prompt = args
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let background = args
+        .get("background")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    if let Some(parallel) = args.get("parallel").and_then(serde_json::Value::as_array) {
+        let agent_names = parallel
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        if agent_names.is_empty() {
+            return None;
+        }
+
+        return Some(DelegateEventPreview {
+            event_id: make_chat_event_id("delegate"),
+            agent_names,
+            prompt_summary: truncate_preview_text(prompt, 180),
+            background,
+            parallel: true,
+            active_agent_name: None,
+        });
+    }
+
+    let agent_name = args
+        .get("agent")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+
+    Some(DelegateEventPreview {
+        event_id: make_chat_event_id("delegate"),
+        agent_names: vec![agent_name.to_string()],
+        prompt_summary: truncate_preview_text(prompt, 180),
+        background,
+        parallel: false,
+        active_agent_name: Some(agent_name.to_string()),
+    })
+}
+
+fn current_delegate_actor() -> Option<String> {
+    ACTIVE_DELEGATE_AGENT
+        .try_with(|value| value.trim().to_string())
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
     }
 
     value.chars().take(max_chars).collect::<String>() + "..."
+}
+
+fn truncate_preview_text(value: &str, max_chars: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_chars(&normalized, max_chars)
+}
+
+fn make_chat_event_id(prefix: &str) -> String {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_micros())
+        .unwrap_or(0);
+    format!("{prefix}-{stamp}")
+}
+
+fn current_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 
 async fn relay_fallback_chunks(
@@ -1355,6 +1645,11 @@ fn emit_approval_request(
     payload: &ChatApprovalRequestPayload,
 ) -> Result<(), String> {
     app.emit("chat:approval-request", payload.clone())
+        .map_err(|error| error.to_string())
+}
+
+fn emit_delegate_event(app: &AppHandle, payload: &ChatDelegateEventPayload) -> Result<(), String> {
+    app.emit("chat:delegate", payload.clone())
         .map_err(|error| error.to_string())
 }
 

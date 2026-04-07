@@ -25,6 +25,12 @@ pub async fn send_message(
         .unwrap_or_else(|| content.chars().take(48).collect::<String>());
     let db_path = state.db_path();
     let run_agent_mode = agent_mode.unwrap_or(false);
+    if run_agent_mode {
+        let settings = services::runtime::load_runtime_settings(&state.settings_path())?;
+        if !settings.agent.enabled {
+            return Err("Main agent is disabled in Settings > Agent.".to_string());
+        }
+    }
 
     db::upsert_session(&db_path, &session_id, &title)?;
     db::set_session_agent_mode(&db_path, &session_id, run_agent_mode)?;
@@ -101,6 +107,12 @@ pub fn set_session_agent_mode(
     session_id: String,
     agent_mode: bool,
 ) -> Result<(), String> {
+    if agent_mode {
+        let settings = services::runtime::load_runtime_settings(&state.settings_path())?;
+        if !settings.agent.enabled {
+            return Err("Main agent is disabled in Settings > Agent.".to_string());
+        }
+    }
     db::set_session_agent_mode(&state.db_path(), &session_id, agent_mode)
 }
 

@@ -507,8 +507,13 @@ function createRuntimeGroupId(baseName: string) {
   return candidate;
 }
 
-function createRuntimeEntryId(baseName: string, group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value) {
-  const existingEntries = group?.entries ?? [];
+function createRuntimeEntryId(
+  baseName: string,
+  group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value,
+  excludeEntryIds: string[] = []
+) {
+  const excludedIds = new Set(excludeEntryIds);
+  const existingEntries = (group?.entries ?? []).filter((entry) => !excludedIds.has(entry.id));
   const base = slugifyEntryName(baseName) || `entry-${existingEntries.length + 1}`;
   let candidate = base;
   let suffix = 2;
@@ -523,9 +528,11 @@ function createRuntimeEntryId(baseName: string, group: RuntimeProviderGroupRecor
 
 function createRuntimeEntryName(
   baseName: string,
-  group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value
+  group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value,
+  excludeEntryIds: string[] = []
 ) {
-  const existingEntries = group?.entries ?? [];
+  const excludedIds = new Set(excludeEntryIds);
+  const existingEntries = (group?.entries ?? []).filter((entry) => !excludedIds.has(entry.id));
   const base = baseName.trim() || t("settings.entryNames.generated", { count: existingEntries.length + 1 });
   let candidate = base;
   let suffix = 2;
@@ -551,19 +558,24 @@ function createRuntimeGroup(name: string, overrides: Partial<RuntimeProviderGrou
 
 function createRuntimeEntry(
   overrides: Partial<RuntimeProviderEntryRecord> = {},
-  group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value
+  group: RuntimeProviderGroupRecord | null | undefined = activeRuntimeGroup.value,
+  excludeEntryIds: string[] = []
 ) {
   const draft = defaultRuntimeProviderEntry({
     ...overrides
   });
-  const name = createRuntimeEntryName(overrides.name ?? resolveRuntimeEntryName(draft), group);
+  const name = createRuntimeEntryName(overrides.name ?? resolveRuntimeEntryName(draft), group, excludeEntryIds);
 
   return defaultRuntimeProviderEntry({
     ...draft,
     ...overrides,
     name,
-    id: createRuntimeEntryId(overrides.id ?? name, group)
+    id: createRuntimeEntryId(overrides.id ?? name, group, excludeEntryIds)
   });
+}
+
+function createCopiedName(name: string) {
+  return t("settings.copyName", { name });
 }
 
 function ensureSelectedRuntimeEntry() {
@@ -1051,6 +1063,36 @@ function handleOpenEditRuntimeEntry(groupId: string, entryId: string) {
   authLoginStatus.value = null;
 }
 
+function handleCopyRuntimeEntry(groupId: string, entryId: string) {
+  const group = form.groups.find((candidate) => candidate.id === groupId);
+  const entry = group?.entries.find((candidate) => candidate.id === entryId);
+  if (!group || !entry) {
+    return;
+  }
+
+  drawerRuntimeGroupId.value = group.id;
+  drawerRuntimeEntryId.value = "";
+  createGroupName.value = group.name;
+  Object.assign(
+    createEntryDraft,
+    defaultRuntimeProviderEntry({
+      ...cloneRuntimeEntry(entry),
+      id: "",
+      name: createRuntimeEntryName(createCopiedName(resolveRuntimeEntryName(entry)), group)
+    })
+  );
+  runtimeEditorMode.value = "create";
+  showApiKey.value = false;
+  stopAuthLoginPolling();
+  authLoginChallenge.value = null;
+  authLoginStatus.value = null;
+  saveMessage.value = t("settings.feedback.copiedEntryDraft", {
+    name: resolveRuntimeEntryName(createEntryDraft)
+  });
+  testMessage.value = "";
+  settingsStore.testReport = null;
+}
+
 function handleCloseRuntimeDrawer() {
   runtimeEditorMode.value = "closed";
   resetCreateDraft();
@@ -1122,6 +1164,9 @@ function buildRuntimeAgentPayload() {
   return cloneRuntimeSettings({
     ...persisted,
     agent: {
+      enabled: form.agent.enabled,
+      runtime_group_id: form.agent.runtime_group_id,
+      runtime_entry_id: form.agent.runtime_entry_id,
       workspace_dir: form.agent.workspace_dir,
       compact_context: form.agent.compact_context,
       max_tool_iterations: Number(form.agent.max_tool_iterations),
@@ -1221,7 +1266,8 @@ async function handleConfirmRuntimeDrawer() {
         id: drawerRuntimeEntryId.value,
         name: createEntryDraft.name.trim() || resolveRuntimeEntryName(createEntryDraft)
       },
-      group
+      group,
+      [drawerRuntimeEntryId.value]
     );
     group.entries[entryIndex] = updatedEntry;
     selectedRuntimeEntryId.value = updatedEntry.id;
@@ -1370,6 +1416,28 @@ async function handleCreateProfile() {
     });
   } catch {
     saveMessage.value = t("settings.feedback.createProfileFailed");
+  }
+}
+
+async function handleCopyProfile() {
+  if (!activeProfile.value) {
+    return;
+  }
+
+  saveMessage.value = "";
+  testMessage.value = "";
+  settingsStore.testReport = null;
+
+  const sourceName = resolveProfileName(activeProfile.value.name);
+  const copiedName = createCopiedName(sourceName);
+
+  try {
+    await settingsStore.createProfile(copiedName, buildRuntimeSettingsPayload());
+    saveMessage.value = t("settings.feedback.copiedProfile", {
+      name: resolveProfileName(activeProfile.value?.name ?? copiedName)
+    });
+  } catch {
+    saveMessage.value = t("settings.feedback.copyProfileFailed");
   }
 }
 
@@ -1603,6 +1671,17 @@ function cloneRuntimeSettings(runtime: RuntimeSettingsRecord): RuntimeSettingsRe
       no_proxy: [...(runtime.proxy?.no_proxy ?? [])],
       services: [...(runtime.proxy?.services ?? [])]
     },
+    delegate: {
+      ...defaults.delegate,
+      ...(runtime.delegate ?? defaults.delegate)
+    },
+    agents: (runtime.agents ?? defaults.agents).map((agent) => ({
+      ...agent,
+      enabled: agent.enabled ?? true,
+      runtime_group_id: agent.runtime_group_id ?? "",
+      runtime_entry_id: agent.runtime_entry_id ?? "",
+      allowed_tools: [...(agent.allowed_tools ?? [])]
+    })),
     agent: {
       ...defaults.agent,
       ...(runtime.agent ?? defaults.agent)
@@ -1720,7 +1799,17 @@ function buildRuntimeSettingsPayload(activeEntryId = activeRuntimeGroup.value?.a
     auth_profile: activeEntry.auth_profile,
     temperature: Number(activeEntry.temperature),
     proxy: cloneProxySettings(proxySettings.value),
+    delegate: {
+      ...form.delegate
+    },
+    agents: form.agents.map((agent) => ({
+      ...agent,
+      allowed_tools: [...agent.allowed_tools]
+    })),
     agent: {
+      enabled: form.agent.enabled,
+      runtime_group_id: form.agent.runtime_group_id,
+      runtime_entry_id: form.agent.runtime_entry_id,
       workspace_dir: form.agent.workspace_dir,
       compact_context: form.agent.compact_context,
       max_tool_iterations: Number(form.agent.max_tool_iterations),
@@ -1868,6 +1957,7 @@ function splitDelimitedList(value: string) {
                 {{ settingsStore.isExporting ? t("settings.exporting") : t("settings.exportJson") }}
               </Button>
               <Button variant="secondary" :disabled="settingsStore.isSaving || settingsStore.isLoading" @click="handleCreateProfile">{{ t("settings.newProfile") }}</Button>
+              <Button variant="secondary" :disabled="!activeProfile || settingsStore.isSaving || settingsStore.isLoading" @click="handleCopyProfile">{{ t("settings.copy") }}</Button>
               <Button variant="secondary" :disabled="!activeProfile || settingsStore.isSaving || settingsStore.isLoading" @click="handleRenameProfile">{{ t("settings.rename") }}</Button>
               <Button variant="secondary" :disabled="!activeProfile || settingsStore.isSaving || settingsStore.isLoading" @click="handleDeleteProfile">{{ t("settings.delete") }}</Button>
             </div>
@@ -1938,17 +2028,18 @@ function splitDelimitedList(value: string) {
               <span class="muted">{{ entry.model }}</span>
             </div>
             <div class="row entry-card__badges">
-              <span v-if="selectedRuntimeGroup?.id === form.active_group_id && entry.id === selectedRuntimeGroup?.active_entry_id" class="profile-card__badge">{{ t("settings.entryActive") }}</span>
+              <span v-if="selectedRuntimeGroup?.id === form.active_group_id && entry.id === selectedRuntimeGroup?.active_entry_id" class="profile-card__badge">{{ t("settings.entryDefault") }}</span>
               <span v-if="entry.id === selectedRuntimeEntry?.id" class="entry-card__badge entry-card__badge--selected">{{ t("settings.entrySelected") }}</span>
             </div>
             <div class="row entry-card__actions">
               <Button variant="ghost" @click.stop="handleOpenEditRuntimeEntry(selectedRuntimeGroup!.id, entry.id)">{{ t("settings.edit") }}</Button>
+              <Button variant="ghost" @click.stop="handleCopyRuntimeEntry(selectedRuntimeGroup!.id, entry.id)">{{ t("settings.copy") }}</Button>
               <Button
                 variant="secondary"
                 :disabled="selectedRuntimeGroup?.id === form.active_group_id && entry.id === selectedRuntimeGroup?.active_entry_id"
                 @click.stop="handleActivateRuntimeEntry(selectedRuntimeGroup!.id, entry.id)"
               >
-                {{ t("settings.activateEntry") }}
+                {{ t("settings.setDefaultEntry") }}
               </Button>
               <Button variant="ghost" @click.stop="handleSelectRuntimeEntry(entry.id); handleDeleteRuntimeEntry()">{{ t("settings.delete") }}</Button>
             </div>
@@ -2022,11 +2113,11 @@ function splitDelimitedList(value: string) {
                 <div class="stack" style="gap: 6px;">
                   <strong>{{ resolveRuntimeEntryName(currentEditableRuntimeEntry) }}</strong>
                   <span class="muted">
-                    {{ isCreateDrawer ? t("settings.entryDraftDescription") : drawerRuntimeGroup?.id === form.active_group_id && currentEditableRuntimeEntry.id === drawerRuntimeGroup?.active_entry_id ? t("settings.entryActiveDescription") : t("settings.entryInactiveDescription") }}
+                    {{ isCreateDrawer ? t("settings.entryDraftDescription") : drawerRuntimeGroup?.id === form.active_group_id && currentEditableRuntimeEntry.id === drawerRuntimeGroup?.active_entry_id ? t("settings.entryDefaultDescription") : t("settings.entrySavedDescription") }}
                   </span>
                 </div>
                 <span class="entry-editor-summary__badge">
-                  {{ isCreateDrawer ? t("settings.entryDraft") : drawerRuntimeGroup?.id === form.active_group_id && currentEditableRuntimeEntry.id === drawerRuntimeGroup?.active_entry_id ? t("settings.entryActive") : t("settings.entryInactive") }}
+                  {{ isCreateDrawer ? t("settings.entryDraft") : drawerRuntimeGroup?.id === form.active_group_id && currentEditableRuntimeEntry.id === drawerRuntimeGroup?.active_entry_id ? t("settings.entryDefault") : t("settings.entrySaved") }}
                 </span>
               </div>
 

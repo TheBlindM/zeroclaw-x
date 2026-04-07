@@ -31,6 +31,7 @@ pub struct ChatApprovalRequestPayload {
     pub session_id: String,
     pub tool_name: String,
     pub arguments_summary: String,
+    pub requested_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +40,28 @@ pub enum ChatApprovalDecision {
     Yes,
     No,
     Always,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatDelegateStatus {
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatDelegateEventPayload {
+    pub event_id: String,
+    pub session_id: String,
+    pub status: ChatDelegateStatus,
+    pub agent_names: Vec<String>,
+    pub prompt_summary: String,
+    pub result_summary: Option<String>,
+    pub error: Option<String>,
+    pub background: bool,
+    pub parallel: bool,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

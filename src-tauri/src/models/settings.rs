@@ -42,7 +42,39 @@ pub struct RuntimeProxySettingsRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct RuntimeDelegateSettingsRecord {
+    pub timeout_secs: u64,
+    pub agentic_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RuntimeDelegateAgentRecord {
+    pub enabled: bool,
+    pub name: String,
+    pub runtime_group_id: String,
+    pub runtime_entry_id: String,
+    pub provider: String,
+    pub model: String,
+    pub system_prompt: Option<String>,
+    pub api_key: Option<String>,
+    pub temperature: Option<f64>,
+    pub max_depth: u32,
+    pub agentic: bool,
+    pub allowed_tools: Vec<String>,
+    pub max_iterations: usize,
+    pub timeout_secs: Option<u64>,
+    pub agentic_timeout_secs: Option<u64>,
+    pub skills_directory: Option<String>,
+    pub memory_namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RuntimeAgentSettingsRecord {
+    pub enabled: bool,
+    pub runtime_group_id: String,
+    pub runtime_entry_id: String,
     pub workspace_dir: String,
     pub compact_context: bool,
     pub max_tool_iterations: usize,
@@ -104,6 +136,8 @@ pub struct RuntimeSettingsRecord {
     pub auth_profile: String,
     pub temperature: f64,
     pub proxy: RuntimeProxySettingsRecord,
+    pub delegate: RuntimeDelegateSettingsRecord,
+    pub agents: Vec<RuntimeDelegateAgentRecord>,
     pub agent: RuntimeAgentSettingsRecord,
     pub autonomy: RuntimeAutonomySettingsRecord,
 }
@@ -181,9 +215,45 @@ impl Default for RuntimeProxySettingsRecord {
     }
 }
 
+impl Default for RuntimeDelegateSettingsRecord {
+    fn default() -> Self {
+        Self {
+            timeout_secs: 120,
+            agentic_timeout_secs: 300,
+        }
+    }
+}
+
+impl Default for RuntimeDelegateAgentRecord {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            name: String::new(),
+            runtime_group_id: String::new(),
+            runtime_entry_id: String::new(),
+            provider: "openrouter".to_string(),
+            model: "anthropic/claude-sonnet-4.6".to_string(),
+            system_prompt: None,
+            api_key: None,
+            temperature: None,
+            max_depth: 2,
+            agentic: true,
+            allowed_tools: Vec::new(),
+            max_iterations: 8,
+            timeout_secs: None,
+            agentic_timeout_secs: None,
+            skills_directory: None,
+            memory_namespace: None,
+        }
+    }
+}
+
 impl Default for RuntimeAgentSettingsRecord {
     fn default() -> Self {
         Self {
+            enabled: true,
+            runtime_group_id: String::new(),
+            runtime_entry_id: String::new(),
             workspace_dir: String::new(),
             compact_context: false,
             max_tool_iterations: 10,
@@ -247,6 +317,8 @@ impl Default for RuntimeSettingsRecord {
             auth_profile: entry.auth_profile,
             temperature: entry.temperature,
             proxy: RuntimeProxySettingsRecord::default(),
+            delegate: RuntimeDelegateSettingsRecord::default(),
+            agents: Vec::new(),
             agent: RuntimeAgentSettingsRecord::default(),
             autonomy: RuntimeAutonomySettingsRecord::default(),
         }
@@ -450,7 +522,16 @@ impl RuntimeSettingsRecord {
         }
 
         self.proxy = self.proxy.normalized();
+        self.delegate = self.delegate.normalized();
         self.agent = self.agent.normalized();
+        self.resolve_main_agent_binding();
+        self.agents = self
+            .agents
+            .into_iter()
+            .map(RuntimeDelegateAgentRecord::normalized)
+            .filter(|agent| !agent.name.is_empty())
+            .collect();
+        self.resolve_sub_agent_bindings();
         self.autonomy = self.autonomy.normalized();
         self.sync_legacy_fields_from_active_group_entry();
 
@@ -481,6 +562,39 @@ impl RuntimeSettingsRecord {
         self.auth_profile = entry.auth_profile;
         self.temperature = entry.temperature;
     }
+
+    fn resolve_main_agent_binding(&mut self) {
+        let (runtime_group_id, runtime_entry_id) = self.resolve_runtime_binding(
+            &self.agent.runtime_group_id,
+            &self.agent.runtime_entry_id,
+        );
+        self.agent.runtime_group_id = runtime_group_id;
+        self.agent.runtime_entry_id = runtime_entry_id;
+    }
+
+    fn resolve_sub_agent_bindings(&mut self) {
+        let groups = self.groups.clone();
+        let active_group_id = self.active_group_id.clone();
+        for agent in &mut self.agents {
+            let (runtime_group_id, runtime_entry_id) = resolve_runtime_binding_from_groups(
+                &groups,
+                &active_group_id,
+                &agent.runtime_group_id,
+                &agent.runtime_entry_id,
+            );
+            agent.runtime_group_id = runtime_group_id;
+            agent.runtime_entry_id = runtime_entry_id;
+        }
+    }
+
+    fn resolve_runtime_binding(&self, group_id: &str, entry_id: &str) -> (String, String) {
+        resolve_runtime_binding_from_groups(
+            &self.groups,
+            &self.active_group_id,
+            group_id,
+            entry_id,
+        )
+    }
 }
 
 impl RuntimeProxySettingsRecord {
@@ -498,8 +612,52 @@ impl RuntimeProxySettingsRecord {
     }
 }
 
+impl RuntimeDelegateSettingsRecord {
+    pub fn normalized(mut self) -> Self {
+        self.timeout_secs = normalize_positive_u64(self.timeout_secs, 120);
+        self.agentic_timeout_secs = normalize_positive_u64(self.agentic_timeout_secs, 300);
+        self
+    }
+}
+
+impl RuntimeDelegateAgentRecord {
+    pub fn normalized(mut self) -> Self {
+        self.name = self.name.trim().to_string();
+        self.runtime_group_id = self.runtime_group_id.trim().to_string();
+        self.runtime_entry_id = self.runtime_entry_id.trim().to_string();
+        self.provider = self.provider.trim().to_string();
+        self.model = self.model.trim().to_string();
+        self.system_prompt = normalize_optional_string(self.system_prompt);
+        self.api_key = normalize_optional_string(self.api_key);
+        self.temperature = self.temperature.and_then(|value| {
+            if value.is_finite() {
+                Some(value.clamp(0.0, 2.0))
+            } else {
+                None
+            }
+        });
+        self.max_depth = normalize_positive_u32(self.max_depth, 2);
+        self.allowed_tools = normalize_string_list(self.allowed_tools)
+            .into_iter()
+            .map(|value| value.to_ascii_lowercase())
+            .collect();
+        self.max_iterations = normalize_positive_usize(self.max_iterations, 8);
+        self.timeout_secs = self
+            .timeout_secs
+            .map(|value| normalize_positive_u64(value, 120));
+        self.agentic_timeout_secs = self
+            .agentic_timeout_secs
+            .map(|value| normalize_positive_u64(value, 300));
+        self.skills_directory = normalize_optional_string(self.skills_directory);
+        self.memory_namespace = normalize_optional_string(self.memory_namespace);
+        self
+    }
+}
+
 impl RuntimeAgentSettingsRecord {
     pub fn normalized(mut self) -> Self {
+        self.runtime_group_id = self.runtime_group_id.trim().to_string();
+        self.runtime_entry_id = self.runtime_entry_id.trim().to_string();
         self.workspace_dir = self.workspace_dir.trim().to_string();
         self.max_tool_iterations = normalize_positive_usize(self.max_tool_iterations, 10);
         self.max_history_messages = normalize_positive_usize(self.max_history_messages, 50);
@@ -658,6 +816,35 @@ fn normalize_group_name(value: &str, provider: &str, model: &str) -> String {
     "General".to_string()
 }
 
+fn resolve_runtime_binding_from_groups(
+    groups: &[RuntimeProviderGroupRecord],
+    active_group_id: &str,
+    group_id: &str,
+    entry_id: &str,
+) -> (String, String) {
+    let fallback_group = groups
+        .iter()
+        .find(|group| group.id == active_group_id)
+        .or_else(|| groups.first())
+        .cloned()
+        .unwrap_or_default();
+    let group = groups
+        .iter()
+        .find(|group| group.id == group_id.trim())
+        .cloned()
+        .unwrap_or_else(|| fallback_group.clone());
+    let entry = group
+        .entries
+        .iter()
+        .find(|entry| entry.id == entry_id.trim())
+        .cloned()
+        .or_else(|| group.active_entry().cloned())
+        .or_else(|| group.entries.first().cloned())
+        .unwrap_or_default();
+
+    (group.id, entry.id)
+}
+
 fn slugify_entry_name(name: &str) -> String {
     let slug = name
         .chars()
@@ -747,6 +934,33 @@ fn normalize_positive_usize(value: usize, fallback: usize) -> usize {
     } else {
         value
     }
+}
+
+fn normalize_positive_u32(value: u32, fallback: u32) -> u32 {
+    if value == 0 {
+        fallback
+    } else {
+        value
+    }
+}
+
+fn normalize_positive_u64(value: u64, fallback: u64) -> u64 {
+    if value == 0 {
+        fallback
+    } else {
+        value
+    }
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|entry| {
+        let trimmed = entry.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
 }
 
 fn normalize_dispatcher(value: String) -> String {

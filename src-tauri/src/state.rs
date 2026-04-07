@@ -157,6 +157,7 @@ impl AppState {
         session_id: &str,
         tool_name: &str,
         arguments_summary: &str,
+        requested_by: Option<&str>,
     ) -> Result<
         (
             ChatApprovalRequestPayload,
@@ -170,6 +171,7 @@ impl AppState {
             session_id: session_id.to_string(),
             tool_name: tool_name.to_string(),
             arguments_summary: arguments_summary.to_string(),
+            requested_by: requested_by.map(ToString::to_string),
         };
         let (sender, receiver) = oneshot::channel();
 

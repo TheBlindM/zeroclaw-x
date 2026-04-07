@@ -191,9 +191,7 @@ fn ensure_mcp_servers_columns(connection: &Connection) -> Result<(), String> {
 
         connection
             .execute(
-                &format!(
-                    "ALTER TABLE mcp_servers ADD COLUMN {column_name} {column_definition}"
-                ),
+                &format!("ALTER TABLE mcp_servers ADD COLUMN {column_name} {column_definition}"),
                 [],
             )
             .map_err(|error| error.to_string())?;

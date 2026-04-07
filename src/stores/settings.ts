@@ -14,6 +14,8 @@ import {
   testRuntimeSettings,
   updateRuntimeProfile,
   type RuntimeConnectionReport,
+  type RuntimeDelegateAgentRecord,
+  type RuntimeDelegateSettingsRecord,
   type RuntimeProviderEntryRecord,
   type RuntimeProviderGroupRecord,
   type RuntimeProfileRecord,
@@ -54,6 +56,34 @@ export const defaultRuntimeProviderGroup = (
   };
 };
 
+export const defaultRuntimeDelegateSettings = (): RuntimeDelegateSettingsRecord => ({
+  timeout_secs: 120,
+  agentic_timeout_secs: 300
+});
+
+export const defaultRuntimeDelegateAgent = (
+  overrides: Partial<RuntimeDelegateAgentRecord> = {}
+): RuntimeDelegateAgentRecord => ({
+  enabled: true,
+  name: "",
+  runtime_group_id: "",
+  runtime_entry_id: "",
+  provider: "openrouter",
+  model: "anthropic/claude-sonnet-4.6",
+  system_prompt: null,
+  api_key: null,
+  temperature: null,
+  max_depth: 2,
+  agentic: true,
+  allowed_tools: [],
+  max_iterations: 8,
+  timeout_secs: null,
+  agentic_timeout_secs: null,
+  skills_directory: null,
+  memory_namespace: null,
+  ...overrides
+});
+
 export const defaultRuntimeSettings = (): RuntimeSettingsRecord => ({
   active_group_id: "general",
   groups: [defaultRuntimeProviderGroup()],
@@ -75,7 +105,12 @@ export const defaultRuntimeSettings = (): RuntimeSettingsRecord => ({
     no_proxy: [],
     services: []
   },
+  delegate: defaultRuntimeDelegateSettings(),
+  agents: [],
   agent: {
+    enabled: true,
+    runtime_group_id: "",
+    runtime_entry_id: "",
     workspace_dir: "",
     compact_context: false,
     max_tool_iterations: 10,

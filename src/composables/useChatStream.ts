@@ -2,6 +2,7 @@ import { onBeforeUnmount, onMounted } from "vue";
 import {
   onChatApprovalRequest,
   onChatContext,
+  onChatDelegate,
   onChatDone,
   onChatError,
   onChatToken
@@ -22,6 +23,12 @@ export function useChatStream() {
     disposers.push(
       await onChatContext((payload) => {
         chatStore.setContextPreview(payload);
+      })
+    );
+
+    disposers.push(
+      await onChatDelegate((payload) => {
+        chatStore.upsertDelegateEvent(payload);
       })
     );
 

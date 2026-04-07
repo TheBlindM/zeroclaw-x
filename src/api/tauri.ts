@@ -27,9 +27,24 @@ export interface ChatApprovalRequestPayload {
   session_id: string;
   tool_name: string;
   arguments_summary: string;
+  requested_by: string | null;
 }
 
 export type ChatApprovalDecision = "yes" | "no" | "always";
+export type ChatDelegateStatus = "started" | "completed" | "failed";
+
+export interface ChatDelegateEventPayload {
+  event_id: string;
+  session_id: string;
+  status: ChatDelegateStatus;
+  agent_names: string[];
+  prompt_summary: string;
+  result_summary: string | null;
+  error: string | null;
+  background: boolean;
+  parallel: boolean;
+  updated_at: string;
+}
 
 export interface SessionRecord {
   id: string;
@@ -110,12 +125,40 @@ export interface RuntimeProxySettingsRecord {
   services: string[];
 }
 
+export interface RuntimeDelegateSettingsRecord {
+  timeout_secs: number;
+  agentic_timeout_secs: number;
+}
+
+export interface RuntimeDelegateAgentRecord {
+  enabled: boolean;
+  name: string;
+  runtime_group_id: string;
+  runtime_entry_id: string;
+  provider: string;
+  model: string;
+  system_prompt: string | null;
+  api_key: string | null;
+  temperature: number | null;
+  max_depth: number;
+  agentic: boolean;
+  allowed_tools: string[];
+  max_iterations: number;
+  timeout_secs: number | null;
+  agentic_timeout_secs: number | null;
+  skills_directory: string | null;
+  memory_namespace: string | null;
+}
+
 export interface RuntimeProxySupportRecord {
   supported_service_keys: string[];
   supported_selectors: string[];
 }
 
 export interface RuntimeAgentSettingsRecord {
+  enabled: boolean;
+  runtime_group_id: string;
+  runtime_entry_id: string;
   workspace_dir: string;
   compact_context: boolean;
   max_tool_iterations: number;
@@ -150,6 +193,8 @@ export interface RuntimeSettingsRecord {
   auth_profile: string;
   temperature: number;
   proxy: RuntimeProxySettingsRecord;
+  delegate: RuntimeDelegateSettingsRecord;
+  agents: RuntimeDelegateAgentRecord[];
   agent: RuntimeAgentSettingsRecord;
   autonomy: RuntimeAutonomySettingsRecord;
 }
@@ -568,6 +613,10 @@ export function onChatApprovalRequest(listener: (payload: ChatApprovalRequestPay
 
 export function onChatContext(listener: (payload: ChatContextPayload) => void) {
   return listen<ChatContextPayload>("chat:context", (event) => listener(event.payload));
+}
+
+export function onChatDelegate(listener: (payload: ChatDelegateEventPayload) => void) {
+  return listen<ChatDelegateEventPayload>("chat:delegate", (event) => listener(event.payload));
 }
 
 export function onChatToken(listener: (payload: ChatTokenPayload) => void) {
