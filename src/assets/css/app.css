@@ -1982,11 +1982,11 @@ a {
   gap: 16px;
 }
 
-.mcp-hero,
-.mcp-editor,
-.mcp-board,
-.mcp-test-panel {
-  padding: 18px;
+.mcp-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
 }
 
 .mcp-hero__copy {
@@ -1994,20 +1994,40 @@ a {
   line-height: 1.6;
 }
 
-.mcp-summary-grid {
+.mcp-summary-grid,
+.mcp-detail-grid,
+.mcp-insights-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+}
+
+.mcp-summary-grid,
+.mcp-detail-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.mcp-insights-grid {
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
 }
 
 .mcp-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 420px) 1fr;
+  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.28fr);
   gap: 16px;
 }
 
+.mcp-library-panel,
+.mcp-detail-panel,
+.mcp-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  min-height: 0;
+}
+
 .mcp-search {
-  max-width: 260px;
+  min-width: min(260px, 100%);
 }
 
 .mcp-list {
@@ -2022,16 +2042,22 @@ a {
   gap: 12px;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(15, 23, 42, 0.2);
+  border-radius: 18px;
+  background: var(--surface-soft);
   cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    background-color 160ms ease;
 }
 
+.mcp-card:hover,
 .mcp-card[data-active="true"] {
-  background: rgba(59, 130, 246, 0.12);
+  transform: translateY(-1px);
 }
 
-.mcp-card__target {
+.mcp-card__target,
+.mcp-detail-target {
   margin: 0;
   color: var(--foreground);
   font-family:
@@ -2040,6 +2066,7 @@ a {
     Consolas,
     monospace;
   font-size: 0.9rem;
+  line-height: 1.5;
   word-break: break-all;
 }
 
@@ -2055,8 +2082,51 @@ a {
   flex-wrap: wrap;
 }
 
+.mcp-detail-hero,
+.mcp-config-panel,
+.mcp-detail-subpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-soft);
+}
+
+.mcp-detail-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.mcp-detail-stat {
+  min-height: 118px;
+}
+
+.mcp-form-grid,
+.mcp-connection-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.mcp-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.mcp-connection-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mcp-connection-grid__wide {
+  grid-column: 1 / -1;
+}
+
 .mcp-jsonarea {
-  min-height: 132px;
+  min-height: 148px;
   resize: vertical;
   font-family:
     "Cascadia Code",
@@ -2066,20 +2136,13 @@ a {
   font-size: 0.9rem;
 }
 
-@media (max-width: 1100px) {
-  .mcp-layout,
-  .mcp-summary-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 .mcp-tools-panel {
-  padding: 18px;
+  padding: 16px;
 }
 
 .mcp-tool-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
 }
 
@@ -2090,7 +2153,7 @@ a {
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: rgba(15, 23, 42, 0.18);
+  background: var(--surface);
 }
 
 .mcp-schema-block {
@@ -2103,6 +2166,25 @@ a {
 
 .mcp-tools-empty {
   padding: 0;
+}
+
+@media (max-width: 1100px) {
+  .mcp-layout,
+  .mcp-insights-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .mcp-form-grid,
+  .mcp-connection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mcp-search {
+    width: 100%;
+    min-width: 0;
+  }
 }
 .skills-page {
   gap: 16px;
